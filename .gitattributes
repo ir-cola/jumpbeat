@@ -1,0 +1,19 @@
+# Unreal のアセットはバイナリ。
+# 改行変換や差分マージをされると壊れるので明示しておく。
+*.uasset binary
+*.umap   binary
+*.upk    binary
+*.udk    binary
+
+# 音源・画像も同様
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.png binary
+*.jpg binary
+
+# ソースは改行を LF に揃える
+*.cpp text eol=lf
+*.h   text eol=lf
+*.cs  text eol=lf
+*.ini text eol=lf

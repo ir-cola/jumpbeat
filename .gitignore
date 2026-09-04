@@ -1,0 +1,39 @@
+# ==========================================================
+#  Unreal Engine
+#  生成物とキャッシュは追跡しない。
+#  これらは .uproject から再生成できるうえ、合計 6GB 近くある。
+# ==========================================================
+
+# ビルド生成物
+Binaries/
+Intermediate/
+DerivedDataCache/
+Build/
+
+# ローカルの設定・ログ・一時ファイル
+Saved/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.xcodeproj
+*.xcworkspace
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ==========================================================
+#  追跡するもの
+#    Source/    C++ のソース
+#    Content/   アセット（.uasset / .umap）
+#    Config/    プロジェクト設定
+#    *.uproject
+# ==========================================================
