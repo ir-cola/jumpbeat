@@ -35,6 +35,12 @@ public:
 protected:
 	virtual void BeginPlay() override;
 
+	/**
+	 * ★用意しておく粒の数。コンストラクタで作るので変更にはビルドが要る。
+	 *   NumParticles はこの範囲で増減できる。
+	 */
+	static constexpr int32 MaxParticles = 48;
+
 	/** 粒の数 */
 	UPROPERTY(EditDefaultsOnly, Category = "Stair")
 	int32 NumParticles = 12;
@@ -46,6 +52,10 @@ protected:
 	/** 粒の大きさ */
 	UPROPERTY(EditDefaultsOnly, Category = "Stair")
 	float ParticleSize = 0.16f;
+
+	/** 光の強さ。1 を超えると Bloom で滲む */
+	UPROPERTY(EditDefaultsOnly, Category = "Stair")
+	float Glow = 16.f;
 
 	/** 落下の強さ */
 	UPROPERTY(EditDefaultsOnly, Category = "Stair")
@@ -59,6 +69,12 @@ protected:
 
 	/** 粒ごとの色。虹色に散らすときに使う */
 	TArray<FLinearColor> Colors;
+
+	/** 粒ごとの大きさ。粒度を揃えないと造花のように見える */
+	TArray<float> Sizes;
+
+	/** 粒ごとの瞬きの位相。全部が同時に光ると点滅に見える */
+	TArray<float> Phases;
 
 	/** 虹色モードか */
 	bool bRainbow = false;

@@ -635,8 +635,11 @@ void AStairTitleGameMode::Tick(float DeltaSeconds)
 		return;
 	}
 
-	// ゆっくり登り続ける
-	ScrollRow += ScrollRowsPerSecond * DeltaSeconds;
+	// ゆっくり登り続ける。
+	// ★1フレームの進みに上限を置く。起動直後は読み込みで数秒詰まることがあり、
+	//   そのぶんをまとめて進めるとカメラが一気に飛んで、
+	//   まだ敷けていない先へ出てしまう（背景の階段が消えて見える）。
+	ScrollRow += ScrollRowsPerSecond * FMath::Min(DeltaSeconds, 0.05f);
 
 	const int32 Row = FMath::FloorToInt(ScrollRow);
 	Terrain->UpdateAround(Row, 0, 0.f);

@@ -17,6 +17,7 @@
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInterface.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 // =====================================================================
 // 共通基底
@@ -140,47 +141,46 @@ void UStairWidgetBase::PlaceFullScreen(UCanvasPanel* Canvas, UWidget* W)
 // タイトル
 // =====================================================================
 
+// ★行数を厳しく抑える。
+//   下端の「もどる」は画面の下に貼り付いているので、
+//   ウィンドウが低いほど本文との余白が減る。
+//   1600x900 で遊ぶと余白がほとんど無くなり、重なっていた。
 FString UStairWidgetBase::GetHowToKeysText()
 {
 	return FString(
-		TEXT("SPACE      正面へ跳ぶ\n")
-		TEXT("A              左へ跳ぶ\n")
-		TEXT("D              右へ跳ぶ\n")
-		TEXT("Esc            ポーズ\n\n")
-		TEXT("押した瞬間に、\n")
-		TEXT("そのキーの方向へ跳びます。"));
+		TEXT("SPACE   正面へ跳ぶ\n")
+		TEXT("A       左へ跳ぶ\n")
+		TEXT("D       右へ跳ぶ\n")
+		TEXT("Esc     ポーズ"));
 }
 
 FString UStairWidgetBase::GetHowToModesText()
 {
-	// ★1行は14文字くらいまで。左の列は幅が狭いので、
-	//   長い行は自動で折り返されて読みにくくなる。
+	// 左の列は幅が狭い。1行は14文字くらいまでに収める
 	return FString(
 		TEXT("プレイ\n")
-		TEXT("　選んだ曲を最後まで登ります。\n\n")
+		TEXT("　選んだ曲を最後まで。\n\n")
 		TEXT("エンドレス\n")
-		TEXT("　3曲が順番に流れ続けます。\n")
+		TEXT("　3曲が流れ続けます。\n")
 		TEXT("　落ちるまで終わりません。\n")
-		TEXT("　地形は完全ランダムです。\n")
-		TEXT("　向きは自由。タイミングだけ\n")
-		TEXT("　合わせます。\n")
-		TEXT("　記録はのぼった段数です。"));
+		TEXT("　地形はランダム。向きは自由。\n")
+		TEXT("　記録はのぼった段数。"));
 }
 
 FString UStairWidgetBase::GetHowToRulesText()
 {
 	return FString(
-		TEXT("画面左のゲージを、音符が下から昇ってきます。\n")
-		TEXT("緑の帯に重なった瞬間に押すと PERFECT。\n")
-		TEXT("黄色の帯なら GREAT。外すと MISS です。\n\n")
+		TEXT("画面左のゲージを音符が昇ります。\n")
+		TEXT("緑の帯に重なった瞬間に押します。\n")
+		TEXT("ぴったりで PERFECT、近ければ GREAT。\n\n")
 		TEXT("音符の形が跳ぶ方向です。\n")
-		TEXT("白いバー＝正面　　◀＝左　　▶＝右\n\n")
-		TEXT("赤く染まった一列からは、5段先まで大ジャンプ。\n")
-		TEXT("その先は谷になっているので、外すと落ちます。\n\n")
-		TEXT("MISS するとその場で足踏みになります。\n")
-		TEXT("同じ足場で3回 MISS すると、床が崩れて終わりです。\n")
-		TEXT("穴に落ちても終わりです。\n\n")
-		TEXT("曲が終わるまで、どこまで高く登れるかを競います。"));
+		TEXT("白いバー＝正面　　◀＝左　　▶＝右\n")
+		TEXT("向きが違うとミスになります。\n\n")
+		TEXT("赤い一列の先は谷です。\n")
+		TEXT("5段先まで一気に跳び越えます。\n\n")
+		TEXT("外すとその場で足踏み。\n")
+		TEXT("同じ足場で3回外すと床が崩れます。\n")
+		TEXT("穴に落ちても終わりです。"));
 }
 
 void UStairWidgetBase::BuildIris(UCanvasPanel* Canvas)
@@ -267,7 +267,11 @@ void UStairWidgetBase::CloseIrisThen(TFunction<void()> Action)
 
 void UStairWidgetBase::TickIris(float DeltaSeconds)
 {
-	if (IrisDir == 0 || !IrisMat)
+	// ★マテリアルが無くても止めない。
+	//   幕はただの演出だが、レベル切り替えはこの進行に乗せてある。
+	//   ここで抜けると「押しても何も起きない」になってしまう。
+	//   SetIris 側が IrisMat の有無を見てくれる。
+	if (IrisDir == 0)
 	{
 		return;
 	}
@@ -411,6 +415,13 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 		FVector2D(350.f, -190.f), FVector2D(324.f, 118.f));
 	MenuParts.Add(TutorialButton);
 
+	// ★終了は3つ並びの下に、小さく置く。
+	//   間違えて押しても困らないよう、遊ぶボタンとは大きさで差を付ける。
+	QuitButton = MakeButton(TEXT("QuitButton"), TEXT("やめる"), 26);
+	Place(Canvas, QuitButton, FVector2D(0.5f, 1.f), FVector2D(0.5f, 1.f),
+		FVector2D(0.f, -128.f), FVector2D(220.f, 54.f));
+	MenuParts.Add(QuitButton);
+
 	// ---- 素材元の表記（常時表示）----
 	// ★画面下端にぴったり付け、横幅は全体を覆う
 	UBorder* CreditShade = MakeBox(TEXT("CreditShade"),
@@ -450,42 +461,32 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 		const FVector2D Top(0.5f, 0.f);      // 画面上端が基準
 		const FVector2D TopLeft(0.f, 0.f);   // 位置は左上を指す
 
-		UTextBlock* KeysHead = MakeText(TEXT("HowToKeysHead"), TEXT("そうさ"), 26,
-			FLinearColor(0.65f, 0.85f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, KeysHead, Top, TopLeft, FVector2D(-560.f, 150.f),
-			FVector2D(380.f, 36.f));
-		TutorialParts.Add(KeysHead);
+		const int32 HeadSize = 24;
+		const int32 BodySize = 22;
 
-		UTextBlock* Keys = MakeText(TEXT("HowToKeys"), GetHowToKeysText(), 25,
-			FLinearColor(0.95f, 0.96f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, Keys, Top, TopLeft, FVector2D(-560.f, 196.f),
-			FVector2D(400.f, 300.f));
-		TutorialParts.Add(Keys);
+		auto AddBlock = [&](const TCHAR* Name, const FString& Head,
+			const FString& Body, float X, float Y, float W, float H)
+		{
+			UTextBlock* T = MakeText(FString(Name) + TEXT("Head"), Head, HeadSize,
+				FLinearColor(0.65f, 0.85f, 1.f, 1.f), ETextJustify::Left);
+			Place(Canvas, T, Top, TopLeft, FVector2D(X, Y), FVector2D(W, 32.f));
+			TutorialParts.Add(T);
 
-		// ★左の列は「そうさ」が短いので、続けてモードの説明を置く
-		UTextBlock* ModesHead = MakeText(TEXT("HowToModesHead"), TEXT("モード"), 26,
-			FLinearColor(0.65f, 0.85f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, ModesHead, Top, TopLeft, FVector2D(-560.f, 420.f),
-			FVector2D(380.f, 36.f));
-		TutorialParts.Add(ModesHead);
+			UTextBlock* B = MakeText(Name, Body, BodySize,
+				FLinearColor(0.95f, 0.96f, 1.f, 1.f), ETextJustify::Left);
+			Place(Canvas, B, Top, TopLeft, FVector2D(X, Y + 40.f), FVector2D(W, H));
+			TutorialParts.Add(B);
+		};
 
-		UTextBlock* Modes = MakeText(TEXT("HowToModes"), GetHowToModesText(), 25,
-			FLinearColor(0.95f, 0.96f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, Modes, Top, TopLeft, FVector2D(-560.f, 466.f),
-			FVector2D(400.f, 340.f));
-		TutorialParts.Add(Modes);
+		AddBlock(TEXT("HowToKeys"),  TEXT("そうさ"), GetHowToKeysText(),
+			-560.f, 140.f, 400.f, 160.f);
 
-		UTextBlock* RulesHead = MakeText(TEXT("HowToRulesHead"), TEXT("ルール"), 26,
-			FLinearColor(0.65f, 0.85f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, RulesHead, Top, TopLeft, FVector2D(-120.f, 150.f),
-			FVector2D(700.f, 36.f));
-		TutorialParts.Add(RulesHead);
+		// ★「そうさ」は4行と短いので、続けてモードの説明を置く
+		AddBlock(TEXT("HowToModes"), TEXT("モード"), GetHowToModesText(),
+			-560.f, 320.f, 400.f, 280.f);
 
-		UTextBlock* Rules = MakeText(TEXT("HowToRules"), GetHowToRulesText(), 25,
-			FLinearColor(0.95f, 0.96f, 1.f, 1.f), ETextJustify::Left);
-		Place(Canvas, Rules, Top, TopLeft, FVector2D(-120.f, 196.f),
-			FVector2D(700.f, 480.f));
-		TutorialParts.Add(Rules);
+		AddBlock(TEXT("HowToRules"), TEXT("ルール"), GetHowToRulesText(),
+			-120.f, 140.f, 700.f, 460.f);
 	}
 
 	// ---- 曲選択パネル ----
@@ -651,6 +652,10 @@ void UStairTitleWidget::NativeConstruct()
 	{
 		TutorialButton->OnClicked.AddUniqueDynamic(this, &UStairTitleWidget::OnTutorialClicked);
 	}
+	if (QuitButton)
+	{
+		QuitButton->OnClicked.AddUniqueDynamic(this, &UStairTitleWidget::OnQuitClicked);
+	}
 	if (BackButton)
 	{
 		BackButton->OnClicked.AddUniqueDynamic(this, &UStairTitleWidget::OnBackClicked);
@@ -777,6 +782,20 @@ void UStairTitleWidget::OnEndlessClicked()
 		{
 			UGameplayStatics::OpenLevel(Weak.Get(), TEXT("L_Game"));
 		}
+	});
+}
+
+void UStairTitleWidget::OnQuitClicked()
+{
+	PlayButtonSound();
+
+	// ★閉じきってから落とす。いきなり消えると落ちたように見える
+	TWeakObjectPtr<UStairTitleWidget> Weak(this);
+	CloseIrisThen([Weak]()
+	{
+		if (!Weak.IsValid()) { return; }
+		UKismetSystemLibrary::QuitGame(Weak.Get(), Weak->GetOwningPlayer(),
+			EQuitPreference::Quit, false);
 	});
 }
 

@@ -160,6 +160,9 @@ protected:
 	/** ★エンドレス。曲を順番に流し続け、死ぬまで終わらない */
 	UFUNCTION() void OnEndlessClicked();
 
+	/** ゲームを終了する */
+	UFUNCTION() void OnQuitClicked();
+
 	UFUNCTION() void OnSong0Clicked();
 	UFUNCTION() void OnSong1Clicked();
 	UFUNCTION() void OnSong2Clicked();
@@ -176,6 +179,7 @@ protected:
 	UPROPERTY() TObjectPtr<UButton> PlayButton;
 	UPROPERTY() TObjectPtr<UButton> EndlessButton;
 	UPROPERTY() TObjectPtr<UButton> TutorialButton;
+	UPROPERTY() TObjectPtr<UButton> QuitButton;
 	UPROPERTY() TObjectPtr<UButton> BackButton;
 	UPROPERTY() TObjectPtr<UImage> LogoImage;
 

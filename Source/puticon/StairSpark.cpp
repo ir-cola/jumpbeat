@@ -12,11 +12,22 @@ AStairSpark::AStairSpark()
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeAsset(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));
+
+	// ★光る粒には専用のマテリアルを使う。
+	//   BasicShapeMaterial はライトの影響を受けるので、
+	//   暗い場面では沈んでしまい「光っている」ように見えない。
+	//   M_Spark は Unlit + Additive で、Bloom が効いて滲む。
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatAsset(
+		TEXT("/Game/Stair/UI/M_Spark.M_Spark"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FallbackMat(
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 
+	UMaterialInterface* SparkMat = MatAsset.Succeeded()
+		? MatAsset.Object
+		: (FallbackMat.Succeeded() ? FallbackMat.Object : nullptr);
+
 	// 粒はコンストラクタで作っておく。実行中の生成コストを避ける
-	for (int32 i = 0; i < 16; ++i)
+	for (int32 i = 0; i < MaxParticles; ++i)
 	{
 		UStaticMeshComponent* M = CreateDefaultSubobject<UStaticMeshComponent>(
 			*FString::Printf(TEXT("Spark%d"), i));
@@ -24,7 +35,7 @@ AStairSpark::AStairSpark()
 		M->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		M->SetCastShadow(false);
 		if (CubeAsset.Succeeded()) { M->SetStaticMesh(CubeAsset.Object); }
-		if (MatAsset.Succeeded())  { M->SetMaterial(0, MatAsset.Object); }
+		if (SparkMat)              { M->SetMaterial(0, SparkMat); }
 		M->SetVisibility(false);
 		Meshes.Add(M);
 	}
@@ -41,8 +52,8 @@ void AStairSpark::BurstRainbow(float Power)
 	// 粒ごとに色相を変える。派手さは色数で出す
 	bRainbow = true;
 	NumParticles = Meshes.Num();      // 全部使う
-	ParticleSize = 0.22f;
-	Life = 1.15f;
+	ParticleSize = 0.5f;
+	Life = 1.5f;
 	Burst(FLinearColor::White, Power);
 }
 
@@ -58,6 +69,8 @@ void AStairSpark::Burst(const FLinearColor& Color, float Power)
 	Starts.Reset();
 	Colors.Reset();
 	Mats.Reset();
+	Sizes.Reset();
+	Phases.Reset();
 
 	for (int32 i = 0; i < Meshes.Num(); ++i)
 	{
@@ -72,22 +85,30 @@ void AStairSpark::Burst(const FLinearColor& Color, float Power)
 
 		M->SetVisibility(true);
 		M->SetRelativeLocation(FVector::ZeroVector);
-		M->SetRelativeScale3D(FVector(ParticleSize));
+
+		// ★大きさを粒ごとにばらす。全部同じだと造花のように見える
+		const float MySize = ParticleSize * FMath::FRandRange(0.55f, 1.35f);
+		Sizes.Add(MySize);
+		Phases.Add(FMath::FRandRange(0.f, 2.f * PI));
+		M->SetRelativeScale3D(FVector(MySize));
 
 		// ★虹色モードなら粒ごとに色相をずらす
 		FLinearColor MyColor = SparkColor;
 		if (bRainbow)
 		{
-			const float Hue = 360.f * float(i) / float(FMath::Max(1, N));
+			// ぐるっと一周させず、隣り合う粒の色が近くなるよう2周ぶんにする
+			const float Hue = FMath::Fmod(720.f * float(i) / float(FMath::Max(1, N)), 360.f);
 			MyColor = FLinearColor::MakeFromHSV8(
-				uint8(Hue / 360.f * 255.f), 235, 255);
+				uint8(Hue / 360.f * 255.f), 210, 255);
 		}
 		Colors.Add(MyColor);
 
 		if (UMaterialInstanceDynamic* D = M->CreateAndSetMaterialInstanceDynamic(0))
 		{
-			// 段と同じパラメータ名。無い場合は無視される
 			D->SetVectorParameterValue(TEXT("Color"), MyColor);
+			D->SetScalarParameterValue(TEXT("Intensity"), Glow);
+			D->SetScalarParameterValue(TEXT("Alpha"), 1.f);
+			// 光らないマテリアルに落ちたときのため。無い名前は無視される
 			D->SetVectorParameterValue(TEXT("BaseColor"), MyColor);
 			Mats.Add(D);
 		}
@@ -96,14 +117,16 @@ void AStairSpark::Burst(const FLinearColor& Color, float Power)
 			Mats.Add(nullptr);
 		}
 
-		// 上向きの半球にばらまく
+		// ★球状にばらまく。半球だと打ち上げ花火というより噴水に見える。
+		//   少しだけ上に寄せて、開いてから落ちる形にする。
 		const float Ang = FMath::FRandRange(0.f, 2.f * PI);
-		const float Rad = FMath::FRandRange(0.35f, 1.f);
-		const float Up = FMath::FRandRange(0.55f, 1.f);
-		FVector Dir(FMath::Cos(Ang) * Rad, FMath::Sin(Ang) * Rad, Up);
+		const float Z = FMath::FRandRange(-0.35f, 1.f);
+		const float R = FMath::Sqrt(FMath::Max(0.f, 1.f - Z * Z));
+		FVector Dir(FMath::Cos(Ang) * R, FMath::Sin(Ang) * R, Z);
 		Dir.Normalize();
 
-		const float Speed = FMath::FRandRange(260.f, 620.f) * Power;
+		// 速さもばらす。揃っていると輪が広がるだけに見える
+		const float Speed = FMath::FRandRange(320.f, 900.f) * Power;
 		Velocities.Add(Dir * Speed);
 		Starts.Add(FVector::ZeroVector);
 	}
@@ -126,30 +149,48 @@ void AStairSpark::Tick(float DeltaSeconds)
 		UStaticMeshComponent* M = Meshes[i];
 		if (!M) { continue; }
 
-		// 放物線
+		// ★空気抵抗をかける。等速で飛び続けると花火に見えない。
+		//   勢いよく開いて、すっと減速してから落ちる。
+		Velocities[i] *= FMath::Pow(0.12f, DeltaSeconds);
 		Velocities[i].Z -= Gravity * DeltaSeconds;
 		Starts[i] += Velocities[i] * DeltaSeconds;
 		M->SetRelativeLocation(Starts[i]);
 
-		// 縮めながら消す
-		const float S = ParticleSize * (1.f - T);
-		M->SetRelativeScale3D(FVector(FMath::Max(0.f, S)));
+		const float Base = Sizes.IsValidIndex(i) ? Sizes[i] : ParticleSize;
+
+		// ★飛ぶ向きへ伸ばして尾を引かせる。
+		//   速いほど長い筋になり、止まると点に戻る。
+		const float Speed = Velocities[i].Size();
+		if (Speed > 1.f)
+		{
+			M->SetRelativeRotation(Velocities[i].Rotation());
+		}
+		const float Stretch = 1.f + Speed / 260.f;
+
+		// 縮めながら消す。最後まで細く残るよう2乗で落とす
+		const float S = Base * FMath::Max(0.f, 1.f - T * T);
+		M->SetRelativeScale3D(FVector(S * Stretch, S, S));
 
 		if (Mats.IsValidIndex(i) && Mats[i])
 		{
 			FLinearColor C = Colors.IsValidIndex(i) ? Colors[i] : SparkColor;
-			C.A = 1.f - T;
-			// 消え際に白へ寄せて、光が散る見た目にする
-			C = FMath::Lerp(C, FLinearColor::White, T * 0.5f);
 
-			// 虹色モードは瞬かせて花火らしくする
-			if (bRainbow)
-			{
-				const float Flick = 0.75f + 0.25f * FMath::Sin(Age * 42.f + i);
-				C *= Flick;
-			}
+			// 開いた直後は白く飛ばし、そのあと本来の色に落ち着く
+			C = FMath::Lerp(FLinearColor::White, C, FMath::Min(1.f, T * 4.f));
+
+			// ★粒ごとに位相をずらして瞬かせる。
+			//   揃っていると全体が点滅しているようにしか見えない。
+			const float Ph = Phases.IsValidIndex(i) ? Phases[i] : 0.f;
+			const float Flick = 0.65f + 0.35f * FMath::Sin(Age * 38.f + Ph);
+
+			// 消え際は一度強く光ってから落とす
+			const float Fade = FMath::Sin(FMath::Min(1.f, T) * PI * 0.5f + PI * 0.5f);
 
 			Mats[i]->SetVectorParameterValue(TEXT("Color"), C);
+			Mats[i]->SetScalarParameterValue(TEXT("Intensity"), Glow * Flick);
+			Mats[i]->SetScalarParameterValue(TEXT("Alpha"), FMath::Max(0.f, Fade));
+
+			C.A = FMath::Max(0.f, Fade);
 			Mats[i]->SetVectorParameterValue(TEXT("BaseColor"), C);
 		}
 	}
