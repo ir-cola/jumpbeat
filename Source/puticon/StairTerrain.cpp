@@ -28,6 +28,162 @@ void UStairTerrain::ClearAll()
 	RowRange.Empty();
 	GeneratedUpTo = -1;
 	LastRedRow = -1000;
+	// ★譜面の道と横幅の制限は消さない。
+	//   Initialize は地形を作り直すだけで、譜面が変わるわけではない。
+}
+
+void UStairTerrain::SetChartPath(const TMap<int64, EStairTile>& InPath,
+	const TSet<int64>& InClear, const TSet<int32>& InRedRows,
+	const TSet<int32>& InHoleRows)
+{
+	ChartPath = InPath;
+	ChartClear = InClear;
+	ChartRedRows = InRedRows;
+	ChartHoleRows = InHoleRows;
+	bChartRoad = true;
+}
+
+void UStairTerrain::ClearChartPath()
+{
+	ChartPath.Empty();
+	ChartClear.Empty();
+	ChartRedRows.Empty();
+	ChartHoleRows.Empty();
+	bChartRoad = false;
+}
+
+void UStairTerrain::ClearRedRow(int32 Row)
+{
+	ChartRedRows.Remove(Row);
+
+	// 既に置いてある足場も普通の床に塗り直す
+	if (const TPair<int32, int32>* Range = RowRange.Find(Row))
+	{
+		for (int32 Lane = Range->Key; Lane <= Range->Value; ++Lane)
+		{
+			if (AStairStep* S = GetStep(Row, Lane))
+			{
+				if (S->GetTile() == EStairTile::Red)
+				{
+					S->Setup(Row, Lane, EStairTile::Normal);
+					ApplyStepTransform(S, Row, Lane, EStairTile::Normal);
+				}
+			}
+		}
+	}
+}
+
+void UStairTerrain::CollapseRow(int32 Row)
+{
+	// ---- その行を丸ごと壊す ----
+	TArray<int64> Doomed;
+	for (const TPair<int64, TObjectPtr<AStairStep>>& P : Steps)
+	{
+		if (RowOf(P.Key) == Row)
+		{
+			if (P.Value) { P.Value->Destroy(); }
+			Doomed.Add(P.Key);
+		}
+	}
+	for (int64 K : Doomed)
+	{
+		Steps.Remove(K);
+	}
+
+	// ---- それより上を1段ぶん下げる ----
+	// ★若い行から順に動かす。移動先の行は直前に空いているので、
+	//   同じ座標に2つ入ることがない。
+	TArray<int64> Lifted;
+	for (const TPair<int64, TObjectPtr<AStairStep>>& P : Steps)
+	{
+		if (RowOf(P.Key) > Row)
+		{
+			Lifted.Add(P.Key);
+		}
+	}
+	Lifted.Sort();
+
+	for (int64 K : Lifted)
+	{
+		TObjectPtr<AStairStep> S = Steps.FindRef(K);
+		Steps.Remove(K);
+
+		const int32 NewRow = RowOf(K) - 1;
+		const int32 Lane = LaneOf(K);
+
+		if (S)
+		{
+			// ★動かす前の「見た目の」位置を覚えておく。
+			//   スライドの途中ならその途中の位置が入るので、
+			//   何段まとめて詰めても動きが途切れない。
+			const FVector Before = S->GetActorLocation();
+
+			S->Row = NewRow;
+			S->Lane = Lane;
+			ApplyStepTransform(S, NewRow, Lane, S->GetTile());
+
+			// 座標を書き換えただけだと瞬間移動に見えるので、滑らせる
+			S->StartSlideFrom(Before,
+				Config ? Config->RowShiftSlideSeconds : 0.12f);
+		}
+		Steps.Add(Key(NewRow, Lane), S);
+	}
+
+	// ---- 穴・確定範囲・譜面の道も同じように詰める ----
+	auto ShiftKeySet = [Row](TSet<int64>& Set)
+	{
+		TSet<int64> Next;
+		Next.Reserve(Set.Num());
+		for (int64 K : Set)
+		{
+			const int32 R = RowOf(K);
+			if (R == Row) { continue; }
+			Next.Add((R > Row) ? Key(R - 1, LaneOf(K)) : K);
+		}
+		Set = MoveTemp(Next);
+	};
+
+	ShiftKeySet(Holes);
+	ShiftKeySet(ChartClear);
+
+	auto ShiftRowSet = [Row](TSet<int32>& Set)
+	{
+		TSet<int32> Next;
+		for (int32 R : Set)
+		{
+			if (R == Row) { continue; }
+			Next.Add((R > Row) ? (R - 1) : R);
+		}
+		Set = MoveTemp(Next);
+	};
+
+	ShiftRowSet(ChartRedRows);
+	ShiftRowSet(ChartHoleRows);
+
+	{
+		TMap<int64, EStairTile> Next;
+		Next.Reserve(ChartPath.Num());
+		for (const TPair<int64, EStairTile>& P : ChartPath)
+		{
+			const int32 R = RowOf(P.Key);
+			if (R == Row) { continue; }
+			Next.Add((R > Row) ? Key(R - 1, LaneOf(P.Key)) : P.Key, P.Value);
+		}
+		ChartPath = MoveTemp(Next);
+	}
+
+	{
+		TMap<int32, TPair<int32, int32>> Next;
+		for (const TPair<int32, TPair<int32, int32>>& P : RowRange)
+		{
+			if (P.Key == Row) { continue; }
+			Next.Add((P.Key > Row) ? (P.Key - 1) : P.Key, P.Value);
+		}
+		RowRange = MoveTemp(Next);
+	}
+
+	if (GeneratedUpTo >= Row) { --GeneratedUpTo; }
+	if (LastRedRow > Row)     { --LastRedRow; }
 }
 
 FVector UStairTerrain::GetStepLocation(int32 Row, int32 Lane) const
@@ -102,8 +258,13 @@ void UStairTerrain::ApplyStepTransform(AStairStep* Step, int32 Row, int32 Lane,
 		const float Thick = Config->StepScale.Z * 100.f;
 		const float Extra = Config->StepHeight;
 
-		Scale.Z = (Thick + Extra) / 100.f;
-		Loc.Z += Extra * 0.5f;
+		// WallHeightScale = 1 で「1段上と同じ高さ」。
+		// 大きくすると、そこからさらに上へ伸びる。
+		const float Target = (Thick + Extra)
+			* FMath::Max(0.1f, Config->WallHeightScale);
+
+		Scale.Z = Target / 100.f;
+		Loc.Z += (Target - Thick) * 0.5f;
 	}
 
 	Step->SetActorScale3D(Scale);
@@ -294,13 +455,75 @@ void UStairTerrain::GenerateRow(int32 Row, int32 MinLane, int32 MaxLane, float T
 	const int32 RedGap = Config ? Config->RedMinRowGap : 8;
 
 	// 最初の行を全部足場にするかどうか（タイトル背景では土台に見えるので切る）
-	const bool bFirstRow = (Row <= 0) && bSolidFirstRow;
+	// ★スタート地点から数段は穴も壁も出さない。
+	//   開始直後にいきなり避けさせられるのを防ぐ。
+	const int32 Safe = Config ? Config->SafeStartRows : 3;
+	const bool bFirstRow = (Row <= Safe) && bSolidFirstRow;
+
+	// ★赤マスから跳び越していく区間は、着地点の手前まで丸ごと穴にする。
+	//   赤が横一列すべてなので、その先も床が続いていると
+	//   なぜ5段も跳ぶのかが伝わらない。谷にして跳ぶ理由を見せる。
+	//   跳び越える前提の区間なので、到達性の保証もしない。
+	if (ChartHoleRows.Contains(Row))
+	{
+		for (int32 Lane = MinLane; Lane <= MaxLane; ++Lane)
+		{
+			if (HasStep(Row, Lane))
+			{
+				RemoveStep(Row, Lane);
+			}
+			Holes.Add(Key(Row, Lane));
+		}
+		RowRange.Add(Row, TPair<int32, int32>(MinLane, MaxLane));
+		return;
+	}
+
+	// ★譜面で赤マスに指定された行は、横一列すべてを赤で埋める。
+	//   赤はここでしか出さない。ランダムに現れると、
+	//   譜面が指示していない場所で5段跳びが起きてしまう。
+	if (ChartRedRows.Contains(Row))
+	{
+		for (int32 Lane = MinLane; Lane <= MaxLane; ++Lane)
+		{
+			Holes.Remove(Key(Row, Lane));
+
+			if (AStairStep* S = GetStep(Row, Lane))
+			{
+				S->Setup(Row, Lane, EStairTile::Red);
+				ApplyStepTransform(S, Row, Lane, EStairTile::Red);
+			}
+			else
+			{
+				SpawnStep(Row, Lane, EStairTile::Red);
+			}
+		}
+		RowRange.Add(Row, TPair<int32, int32>(MinLane, MaxLane));
+		LastRedRow = Row;
+		return;
+	}
 
 	for (int32 Lane = MinLane; Lane <= MaxLane; ++Lane)
 	{
 		if (HasStep(Row, Lane) || IsKnownHole(Row, Lane))
 		{
 			continue; // 既に確定済み
+		}
+
+		// ★譜面が通る道は、ランダムに関係なく必ず足場にする。
+		//   これで「指定どおりに操作すればきれいに進める」が保証される。
+		EStairTile ChartTile;
+		if (GetChartTile(Row, Lane, ChartTile))
+		{
+			SpawnStep(Row, Lane, ChartTile);
+			continue;
+		}
+
+		// ★譜面の打ち込み中は全部床にする。
+		//   穴や壁があると、置きたい位置まで進めない。
+		if (bAllFloor)
+		{
+			SpawnStep(Row, Lane, EStairTile::Normal);
+			continue;
 		}
 
 		bool bHole = false;
@@ -334,8 +557,18 @@ void UStairTerrain::GenerateRow(int32 Row, int32 MinLane, int32 MaxLane, float T
 				? WallChanceOverride
 				: HoleDensity * (Config ? Config->WallChanceRatio : 0.5f);
 
+			// ★同じレーンで壁が縦に続かないようにする。
+			//   2つ重なると、避けたあとすぐまた避けることになり、
+			//   逃げ道を確保しても通れない場面が生まれる。
+			const bool bWallAbove = IsWall(Row - 1, Lane) || IsWall(Row + 1, Lane);
+
+			// ★譜面がまっすぐ跳び越していく途中のマスには壁を置かない。
+			//   穴なら上を通れるが、壁は背が高いので引っかかってしまう。
+			const bool bMustBeClear = ChartClear.Contains(Key(Row, Lane));
+
 			bool bWall = false;
-			if (!bFirstRow && FMath::FRand() < WallChance)
+			if (!bFirstRow && !bWallAbove && !bMustBeClear
+				&& FMath::FRand() < WallChance)
 			{
 				// 仮に置いて制約を見る。壁は Steps 側で判定するので
 				// 先に足場を作ってから確認し、駄目なら種別を戻す
@@ -358,8 +591,11 @@ void UStairTerrain::GenerateRow(int32 Row, int32 MinLane, int32 MaxLane, float T
 
 			if (!bWall)
 			{
-				// 赤マスにするか判定。最低間隔を守る
-				if (!bFirstRow
+				// 赤マスにするか判定。最低間隔を守る。
+				// ★譜面どおりの道を敷いているときは出さない。
+				//   赤は譜面が指定した行だけに置く。
+				if (!bChartRoad
+					&& !bFirstRow
 					&& (Row - LastRedRow) >= RedGap
 					&& FMath::FRand() < RedChance)
 				{
@@ -394,8 +630,14 @@ void UStairTerrain::UpdateAround(int32 PlayerRow, int32 PlayerLane, float T)
 	const int32 Behind = (KeepBehindOverride >= 0)
 		? KeepBehindOverride : Config->KeepBehind;
 
-	const int32 MinLane = PlayerLane - Radius;
-	const int32 MaxLane = PlayerLane + Radius;
+	// ★横は無限に広げない。譜面が使う幅の外は作っても見えないだけ
+	const int32 MinLane = FMath::Max(PlayerLane - Radius, LaneMin);
+	const int32 MaxLane = FMath::Min(PlayerLane + Radius, LaneMax);
+
+	if (MaxLane < MinLane)
+	{
+		return;   // 完全に範囲の外。これ以上作るものが無い
+	}
 
 	// ---- 前方を生成する。行は必ず若い順に確定させる ----
 	const int32 TargetRow = PlayerRow + Ahead;
@@ -415,6 +657,22 @@ void UStairTerrain::UpdateAround(int32 PlayerRow, int32 PlayerLane, float T)
 			continue;
 		}
 
+		// ★跳び越す谷は端まで穴のまま。継ぎ足して床を作ってはいけない
+		if (ChartHoleRows.Contains(Row))
+		{
+			for (int32 Lane = MinLane; Lane <= MaxLane; ++Lane)
+			{
+				Holes.Add(Key(Row, Lane));
+			}
+			Range->Key = FMath::Min(Range->Key, MinLane);
+			Range->Value = FMath::Max(Range->Value, MaxLane);
+			continue;
+		}
+
+		// ★赤の行に継ぎ足すときも赤にする。一列だけ色が途切れないように
+		const EStairTile Fill = ChartRedRows.Contains(Row)
+			? EStairTile::Red : EStairTile::Normal;
+
 		if (MinLane < Range->Key)
 		{
 			for (int32 Lane = MinLane; Lane < Range->Key; ++Lane)
@@ -422,7 +680,7 @@ void UStairTerrain::UpdateAround(int32 PlayerRow, int32 PlayerLane, float T)
 				if (!HasStep(Row, Lane) && !IsKnownHole(Row, Lane))
 				{
 					// 端は必ず足場にする。境界での不整合を避けるため
-					SpawnStep(Row, Lane, EStairTile::Normal);
+					SpawnStep(Row, Lane, Fill);
 				}
 			}
 			Range->Key = MinLane;
@@ -433,7 +691,7 @@ void UStairTerrain::UpdateAround(int32 PlayerRow, int32 PlayerLane, float T)
 			{
 				if (!HasStep(Row, Lane) && !IsKnownHole(Row, Lane))
 				{
-					SpawnStep(Row, Lane, EStairTile::Normal);
+					SpawnStep(Row, Lane, Fill);
 				}
 			}
 			Range->Value = MaxLane;

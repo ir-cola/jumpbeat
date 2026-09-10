@@ -1,5 +1,7 @@
 #include "StairMenuGameMode.h"
 #include "StairWidgets.h"
+#include "StairGameInstance.h"
+#include "Camera/PlayerCameraManager.h"
 #include "StairTerrain.h"
 #include "StairStep.h"
 #include "StairConfig.h"
@@ -27,6 +29,23 @@ void AStairMenuGameModeBase::BeginPlay()
 		return;
 	}
 
+	// ★幕（UMG）が出そろうまでの数フレームを、カメラ側でも隠す。
+	//   これが無いと、起動直後や切り替え直後に素の背景が一瞬映る。
+	//   起動1回目だけは白、それ以外は丸に合わせて黒。
+	if (PC->PlayerCameraManager)
+	{
+		bool bBoot = false;
+		if (const UStairGameInstance* GI =
+			Cast<UStairGameInstance>(GetGameInstance()))
+		{
+			// ★ウィジェットを作る前に読む。作ったあとだと消されている
+			bBoot = !GI->bBootDone;
+		}
+		PC->PlayerCameraManager->SetManualCameraFade(
+			1.f, bBoot ? FLinearColor::White : FLinearColor::Black, false);
+		ScreenFadeHold = bBoot ? 0.35f : 0.1f;
+	}
+
 	if (MenuWidgetClass)
 	{
 		MenuWidget = CreateWidget<UUserWidget>(PC, MenuWidgetClass);
@@ -38,6 +57,7 @@ void AStairMenuGameModeBase::BeginPlay()
 
 	UWidgetBlueprintLibrary::SetInputMode_UIOnlyEx(PC, MenuWidget, EMouseLockMode::DoNotLock);
 	PC->bShowMouseCursor = true;
+
 }
 
 // =====================================================================
@@ -207,6 +227,37 @@ void AStairTitleGameMode::BeginPlay()
 			BGMComp->OnAudioFinished.AddDynamic(
 				this, &AStairTitleGameMode::HandleBGMFinished);
 		}
+	}
+}
+
+void AStairMenuGameModeBase::TickScreenFade(float DeltaSeconds)
+{
+	if (ScreenFadeHold <= 0.f)
+	{
+		return;
+	}
+
+	ScreenFadeHold -= DeltaSeconds;
+	if (ScreenFadeHold > 0.f)
+	{
+		return;
+	}
+
+	// 幕が出そろったので、カメラ側の覆いは解く
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (PC->PlayerCameraManager)
+		{
+			PC->PlayerCameraManager->StopCameraFade();
+		}
+	}
+}
+
+void AStairTitleGameMode::SetBGMPaused(bool bPause)
+{
+	if (BGMComp)
+	{
+		BGMComp->SetPaused(bPause);
 	}
 }
 
@@ -575,6 +626,9 @@ void AStairTitleGameMode::EndPlay(const EEndPlayReason::Type Reason)
 void AStairTitleGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// 起動直後・切り替え直後の覆いを、幕が出そろったら解く
+	TickScreenFade(DeltaSeconds);
 
 	if (!Terrain || !ViewCamera)
 	{

@@ -112,6 +112,64 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stair")
 	float WallChanceOverride = -1.f;
 
+	/**
+	 * ★譜面のとおりに跳んだときに通る道。
+	 *   ここに指定されたマスは、ランダム生成に関係なく必ず足場になる。
+	 *   赤マスの指定もここで受け取る。
+	 *   地形全体はランダムのまま、通る道だけを保証するための仕組み。
+	 */
+	void SetChartPath(const TMap<int64, EStairTile>& InPath,
+		const TSet<int64>& InClear, const TSet<int32>& InRedRows,
+		const TSet<int32>& InHoleRows);
+
+	/**
+	 * ★その行の赤を解除して普通の床に戻す。
+	 *   赤マスで judgement を外したときに使う。赤のまま残すと
+	 *   次のジャンプも5段になり、譜面とずれ続けてしまう。
+	 */
+	void ClearRedRow(int32 Row);
+
+	/** 譜面の道を全部消す */
+	void ClearChartPath();
+
+	/**
+	 * ★横に広げる範囲を止める。
+	 *   譜面が使う幅は決まっているので、その外は作らない。
+	 */
+	void SetLaneBounds(int32 InMin, int32 InMax) { LaneMin = InMin; LaneMax = InMax; }
+	void ClearLaneBounds() { LaneMin = -1000000; LaneMax = 1000000; }
+
+	/**
+	 * ★横一列を丸ごと壊し、それより上を1段ぶん下げる。
+	 *   MISS で足踏みしたぶんを詰めて、この先の譜面と足場を合わせ直す。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void CollapseRow(int32 Row);
+
+	/** 譜面の道を組み立てる側から座標をキーに変換するために公開する */
+	static int64 MakeKey(int32 Row, int32 Lane)
+	{
+		return ((int64)Row << 20) | (uint32)(Lane + 500000);
+	}
+
+	/** そのマスが譜面の道に含まれるか。含まれるなら種類を返す */
+	bool GetChartTile(int32 Row, int32 Lane, EStairTile& OutTile) const
+	{
+		if (const EStairTile* Found = ChartPath.Find(Key(Row, Lane)))
+		{
+			OutTile = *Found;
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * 全部を床にするか。譜面を打ち込むときに使う。
+	 * 穴や壁があると、置きたい位置まで進めない。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stair")
+	bool bAllFloor = false;
+
 protected:
 	/** 行 Row を丸ごと確定させる */
 	void GenerateRow(int32 Row, int32 MinLane, int32 MaxLane, float T);
@@ -171,6 +229,10 @@ protected:
 		return ((int64)Row << 20) | (uint32)(Lane + 500000);
 	}
 
+	/** キーから座標へ戻す。行を詰めるときに使う */
+	static int32 RowOf(int64 K)  { return (int32)(K >> 20); }
+	static int32 LaneOf(int64 K) { return (int32)(K & 0xFFFFF) - 500000; }
+
 	UPROPERTY()
 	TObjectPtr<UStairConfig> Config;
 
@@ -180,6 +242,36 @@ protected:
 
 	/** 「穴」として確定した座標。生成済み範囲の判定に使う */
 	TSet<int64> Holes;
+
+	/** 譜面が通る道。ここは必ず足場にする */
+	TMap<int64, EStairTile> ChartPath;
+
+	/**
+	 * ★跳び越える途中のマス。穴でもよいが、壁を置いてはいけない。
+	 *   まっすぐ2段跳ぶとき、途中の段に壁があると引っかかるため。
+	 */
+	TSet<int64> ChartClear;
+
+	/**
+	 * ★横一列を丸ごと赤にする行。
+	 *   赤マスは譜面で指定された場所にだけ出す。
+	 *   一列すべて赤くすることで、長距離ジャンプの踏切だと遠目にも分かる。
+	 */
+	TSet<int32> ChartRedRows;
+
+	/**
+	 * ★赤マスから跳び越していく区間。着地点の手前まで丸ごと穴にする。
+	 *   横一列が赤で埋まっているので、その先も床が続いていると
+	 *   なぜ5段も跳ぶのかが分からない。谷にして跳ぶ理由を見せる。
+	 */
+	TSet<int32> ChartHoleRows;
+
+	/** 譜面どおりの道を敷いているか。ランダムの赤マスを止める判断に使う */
+	bool bChartRoad = false;
+
+	/** 横に広げてよい範囲 */
+	int32 LaneMin = -1000000;
+	int32 LaneMax = 1000000;
 
 	/** 行ごとに確定済みのレーン範囲 */
 	TMap<int32, TPair<int32, int32>> RowRange;

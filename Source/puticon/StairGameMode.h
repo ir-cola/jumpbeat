@@ -41,7 +41,26 @@ public:
 
 	/** ★入力を受け付けてよいか。Result中は必ず false */
 	UFUNCTION(BlueprintPure, Category = "Stair")
-	bool IsInputAllowed() const { return State == EStairGameState::Playing; }
+	bool IsInputAllowed() const
+	{
+		// ★曲と曲のあいだは押しても意味がないので受け付けない。
+		//   受けてしまうと、待っているだけで MISS が積み上がる。
+		return State == EStairGameState::Playing && !IsBetweenSongs();
+	}
+
+	// ---------------- エンドレス ----------------
+
+	/** ★曲を順番に流し続け、死ぬまで終わらないモードか */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool IsEndless() const { return bEndless; }
+
+	/** エンドレスで、次の曲が鳴り出すのを待っているあいだか */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool IsBetweenSongs() const;
+
+	/** これまでに流れ終わった曲の数 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetSongsPlayed() const { return SongsPlayed; }
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Stair")
 	void OnStateChanged(EStairGameState NewState);
@@ -89,6 +108,40 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Stair")
 	EStairJudge JudgeNow() const;
 
+	/**
+	 * ★指定した再生位置で押したものとして判定する。
+	 *   跳んでいる最中に押された入力は着地まで持ち越すので、
+	 *   「押した瞬間の時刻」で判定しないと不当に遅れた扱いになる。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	EStairJudge JudgeAt(float AtSongTime) const;
+
+	/**
+	 * ★いまの瞬間のズレ（秒）。符号つき。
+	 *   マイナス＝音符より早い（FAST）、プラス＝遅い（SLOW）。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetSignedJudgeOffset() const;
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetSignedJudgeOffsetAt(float AtSongTime) const;
+
+	/** いまの再生位置（秒）。入力を押した時刻を覚えておくのに使う */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetSongTimeNow() const;
+
+	/**
+	 * ★押した向きが、いま待っている音符と合っているか。
+	 *   合っていなければ、タイミングが良くても MISS にする。
+	 *   譜面どおりに叩くゲームなので、向きが違えば叩けていない。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool DoesDirectionMatch(EStairDir Dir) const;
+
+	/** 直前に跳んだときのズレ（秒）。FAST / SLOW の表示に使う */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetLastJudgeOffset() const { return LastJudgeOffset; }
+
 	/** ゲージ描画用。判定と同じパラメータから作る */
 	UFUNCTION(BlueprintPure, Category = "Stair")
 	float GetBeatPhase() const;
@@ -125,13 +178,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void NotifyPlayerFell();
 
-	/** 判定が出たときに集計する */
+	/** 判定が出たときに集計する。SignedOffset は押した瞬間のズレ（秒） */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void NotifyJudge(EStairJudge Judge);
+	void NotifyJudge(EStairJudge Judge, float SignedOffset);
 
 	/** その場ジャンプ＝いま乗っている足場にMISSを記録する */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void NotifyMissOnCurrentStep();
+
+	/**
+	 * ★拍を外して足踏みしたとき。
+	 *
+	 *   譜面があるときは、ここでは数えない。
+	 *   外した音符は「叩かれずに通り過ぎた」ほうでも数えるので、
+	 *   両方で数えると1回のミスが2回に見えてしまう。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void NotifyMissJump();
 
 	// ---------------- 遷移 ----------------
 
@@ -143,6 +206,17 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void RetryGame();
+
+	/**
+	 * ★Esc でポーズを切り替える。
+	 *   ゲームを止めると Tick が来なくなり時計も進まないので、
+	 *   曲の位置は保たれる。音だけは別に止める必要がある。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void TogglePause();
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool IsPaused() const { return State == EStairGameState::Paused; }
 
 	/**
 	 * プレイヤーを取得する。★毎回取り直す。
@@ -169,6 +243,15 @@ protected:
 
 	/** 直近に鳴らしたカウントダウンの数字。0=未再生 */
 	int32 LastCountdownNumber = 0;
+
+	/** ポーズに入る前の状態。再開するときに戻す */
+	EStairGameState StateBeforePause = EStairGameState::Playing;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> PauseWidget;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Stair|UI")
+	TSubclassOf<UUserWidget> PauseWidgetClass;
 
 	/**
 	 * ★プレイ中にタイミング補正を耳で合わせる。
@@ -205,27 +288,6 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Stair")
 	int32 GetJumpMissCount() const { return JumpMissCount; }
 
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	int32 GetShotMissCount() const { return ShotMissCount; }
-
-	// ---------------- 射撃 ----------------
-
-	/** 撃つ。射程内の隕石を自動で狙う */
-	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void FireShot();
-
-	/** 残りチャージ */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	int32 GetCharges() const { return Charges; }
-
-	/** リロード中か */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	bool IsReloading() const { return ReloadLeft > 0.f; }
-
-	/** リロードの残り時間（0〜1） */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	float GetReloadProgress() const;
-
 	// ---------------- ゲージの表示 ----------------
 
 	/**
@@ -234,7 +296,8 @@ public:
 	 */
 	struct FStairGhost
 	{
-		float Phase = 0.f;
+		/** 音符からのズレ（秒）。マイナス＝早い */
+		float Offset = 0.f;
 		float Age = 0.f;
 		EStairJudge Judge = EStairJudge::Miss;
 	};
@@ -242,37 +305,12 @@ public:
 	const TArray<FStairGhost>& GetGhosts() const { return Ghosts; }
 
 	/**
-	 * ゲージが去る進み具合。0=通常、1=完全に画面外。
-	 * 50段のぼると去り、二度と戻らない。
-	 */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	float GetGaugeExitAlpha() const { return GaugeExitAlpha; }
-
-	// ---------------- イントロ ----------------
-
-	/** テンポ合わせで何回押せたか */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	int32 GetIntroTaps() const { return IntroTaps; }
-
-	/** テンポ合わせで必要な回数 */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	int32 GetIntroNeeded() const;
-
-	/** イントロ中に SPACE が押された。判定して数える */
-	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void NotifyIntroTap();
-
-	/**
 	 * ★カウントダウン中の空押し。
-	 *   進みはしないが、押した位置は残像に残す。
-	 *   曲が始まる前に拍を確かめ続けられるようにするため。
+	 *   進みはしないが、押した位置は残像に残る。
+	 *   START までのあいだ拍を確かめられるようにするため。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void NotifyPracticeTap();
-
-	/** 画面に出すイントロの案内文 */
-	UFUNCTION(BlueprintPure, Category = "Stair")
-	FString GetIntroText() const;
 
 	// ---------------- 譜面づくり ----------------
 
@@ -303,6 +341,76 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Stair|Chart")
 	FString GetChartText() const;
 
+	/** 編集中に音符を置く。キーごとに種類が変わる */
+	UFUNCTION(BlueprintCallable, Category = "Stair|Chart")
+	void ChartPlaceTyped(EStairNote Type);
+
+	// ---------------- 譜面にそった進行 ----------------
+
+	/**
+	 * ★次に来る音符までの時間（秒）。マイナスなら通り過ぎている。
+	 *   A案では「一定間隔の拍」ではなく、この音符に対して判定する。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetTimeToNextNote() const;
+
+	/** 次の音符の種類 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	EStairNote GetNextNoteType() const;
+
+	/**
+	 * ★いま跳んだとして、次に跳べるようになるまでの残り時間（秒）。
+	 *
+	 *   着地するまで次のジャンプは受け付けないので、
+	 *   この時間より滞空時間が長いと、次の音符が押せなくなる。
+	 *   譜面が無いときは BIG_NUMBER（＝制限なし）。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetNextNoteWindow() const;
+
+	/** 譜面があるか。無ければ従来どおり全拍で跳べる */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool HasChart() const { return CurrentSong.Notes.Num() > 0; }
+
+	/**
+	 * ★譜面どおりの道を地形に敷いているか。
+	 *   エンドレスは地形を完全ランダムにするので false。
+	 *   「譜面に合わせて地形を直す」処理はすべてこれで分岐する。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool HasChartRoad() const { return HasChart() && !bEndless; }
+
+	/**
+	 * ★音符1つで進む段数。
+	 *   通常プレイは1段、エンドレスは2段。
+	 *   道を作る側・跳ぶ側・MISSで詰める側が
+	 *   同じ値を見るように、ここ1箇所で決める。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetStepsPerNote() const;
+
+	/**
+	 * ★カウントダウンの最後、START と同時に押されたときに遊びを始める。
+	 *   間に合っていれば true。そのまま最初の1歩として跳ばせる。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	bool TryStartFromCountdown();
+
+	// ---- ゲージに音符を並べるための情報 ----
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetNoteCount() const { return CurrentSong.Notes.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetNextNoteIndex() const { return NextNoteIndex; }
+
+	/** その音符が「いまから何秒後」か。マイナスなら通り過ぎている */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetNoteTimeFromNow(int32 Index) const;
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	EStairNote GetNoteType(int32 Index) const;
+
 protected:
 	/**
 	 * ★判定のたびに呼ぶ。
@@ -317,74 +425,91 @@ protected:
 	int32 Combo = 0;
 	int32 MaxCombo = 0;
 
-	/** MISS の内訳。合計が MissCount になる */
+	/** 拍を外した回数。MissCount と同じ意味だが、内訳表示に使う */
 	int32 JumpMissCount = 0;
-	int32 ShotMissCount = 0;
-
-	// ---------------- 射撃 ----------------
-
-	/** 残りチャージ。0 になるとリロードが入る */
-	int32 Charges = 3;
-
-	/** リロードの残り時間。0 より大きいあいだは撃てない */
-	float ReloadLeft = 0.f;
-
-	/** 射程内でいちばん判定に近い隕石を返す */
-	class AStairMeteor* FindShotTarget() const;
-
-	// ---------------- 隕石 ----------------
-
-	/** 譜面のどこまで処理したか */
-	int32 NextMeteorIndex = 0;
-
-	/** いま落ちている隕石 */
-	UPROPERTY()
-	TArray<TObjectPtr<class AStairMeteor>> Meteors;
-
-	/** 譜面を見て、時間が来たら隕石を落とす */
-	void UpdateMeteors(float DeltaSeconds);
-
-	/** 撃ち漏らした。前方の足場を1つ壊す */
-	void HandleMeteorImpact(class AStairMeteor* M);
 
 	// ---------------- ゲージの表示 ----------------
 
 	/** 押した位置の残像。新しいものが先頭 */
 	TArray<FStairGhost> Ghosts;
 
-	/** ゲージが去る進み具合。一度1になったら戻さない */
-	float GaugeExitAlpha = 0.f;
-
-	/** 残像を進め、ゲージの退場を判断する */
+	/** 残像を古くしていく */
 	void UpdateGaugeState(float DeltaSeconds);
 
-	// ---------------- イントロ ----------------
+	/** 直前に跳んだときのズレ（秒） */
+	float LastJudgeOffset = 0.f;
 
-	/** テンポどおりに押せた回数 */
-	int32 IntroTaps = 0;
+	// ---------------- エンドレス ----------------
 
-	/** 直前に成功した拍。連続して押せているかの判断に使う */
-	int32 IntroLastBeat = -9999;
+	bool bEndless = false;
+	int32 EndlessSongIndex = 0;
+	int32 SongsPlayed = 0;
 
-	/** イントロを進める。ガイド音を鳴らし、押し終わったら次へ */
-	void UpdateIntro(float DeltaSeconds);
+	/** Config の曲を読み込んで、譜面ファイルがあれば差し替える */
+	void LoadSong(int32 Index);
 
-	/** 直前にガイド音を鳴らした拍 */
-	int32 IntroLastGuideBeat = -9999;
+	/** いまの曲を鳴らし始める。Lead 秒だけ間をおく */
+	void StartCurrentSong(float Lead);
 
-	/** 前フレームの位相。拍を跨いだ瞬間を正確に捉えるのに使う */
-	float IntroPrevPhase = 0.f;
+	/** エンドレスで次の曲へ移る */
+	void AdvanceEndlessSong();
+
+	/**
+	 * ★進み損ねた段数を地形から取り除いて、この先の譜面と足場を合わせ直す。
+	 *
+	 *   呼ぶのは「音符が1つ消えたのに、プレイヤーが進まなかった」ときだけ。
+	 *   拍と関係ない空押しで呼んではいけない。譜面は進んでいないので、
+	 *   詰めるとかえってずれる。
+	 */
+	void CollapseRows(int32 Count, bool bClearRedUnderPlayer);
+
+	/** いま乗っている足場を傷める。3回で崩れる */
+	void DamageCurrentStep();
+
+	/**
+	 * ★音符を叩かずに通り過ぎたとき。
+	 *   コンボを切り、足場を傷め、進み損ねたぶんの行を詰める。
+	 */
+	void OnNoteMissed(int32 Index);
+
+	/** 行を詰めた回数。段数を数え直すのに使う */
+	int32 RowShiftTotal = 0;
+
+	/**
+	 * ★レベルが切り替わった直後、UIの幕が出るまでの残り時間。
+	 *
+	 *   幕は UMG なので、レベルの1枚目には間に合わないことがある。
+	 *   そのあいだカメラ側でも暗くしておき、
+	 *   切り替え直後に素の画面が一瞬映るのを防ぐ。
+	 */
+	float ScreenFadeHold = 0.f;
+
+	void StartScreenFade(const FLinearColor& Color);
+	void TickScreenFade(float DeltaSeconds);
 
 	// ---------------- 譜面づくり ----------------
 
 	/** 譜面編集モードか */
 	bool bCharting = false;
 
-	/** 打ち込んだ拍。書き出すとこれが譜面になる */
-	TArray<int32> ChartBeats;
+	/** 打ち込んだ音符。書き出すとこれが譜面になる */
+	TArray<FStairChartNote> ChartNotes;
 
 	/** 譜面編集の操作を受け付ける */
 	void UpdateCharting();
+
+	/** いま何番目の音符を待っているか */
+	int32 NextNoteIndex = 0;
+
+	/** 音符1つの時刻（秒）を求める */
+	float NoteTime(int32 Index) const;
+
+	/**
+	 * ★譜面のとおりに跳いだときに通る道を先に計算し、
+	 *   その位置に必ず足場があるよう地形へ伝える。
+	 *   地形自体はランダムのまま。譜面の道だけを保証する。
+	 */
+	void BuildChartPath();
 
 	/** 直前に成功した判定の拍番号。連続かどうかの判断に使う */
 	int32 LastComboBeat = -9999;
@@ -463,6 +588,14 @@ public:
 	EStairEndReason EndReason = EStairEndReason::None;
 
 	float StateTime = 0.f;
+
+	/** いまの状態に入ってからの秒数。リザルトへの幕引きに使う */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetStateTime() const { return StateTime; }
+
+	/** Finished から Result までの待ち時間 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float GetFinishedHold() const { return FinishedHold; }
 
 	/** Finished から Result までの待ち（演出のため） */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Stair")

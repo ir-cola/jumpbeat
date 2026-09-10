@@ -7,6 +7,9 @@
 UENUM(BlueprintType)
 enum class EStairGameState : uint8
 {
+	/** Esc で止めている最中 */
+	Paused   UMETA(DisplayName = "ポーズ"),
+
 	/**
 	 * ★曲が始まる前に、テンポを体に入れてもらう区間。
 	 *   拍どおりに SPACE を規定回数押せたらカウントダウンへ進む。
@@ -35,6 +38,35 @@ enum class EStairJudge : uint8
 	Perfect  UMETA(DisplayName = "PERFECT"),
 	Great    UMETA(DisplayName = "GREAT"),
 	Miss     UMETA(DisplayName = "MISS")
+};
+
+/**
+ * ★譜面の音符の種類。どう跳ぶかを表す。
+ *   打ち込みは SPACE / A / D / W に対応する。
+ */
+UENUM(BlueprintType)
+enum class EStairNote : uint8
+{
+	Forward  UMETA(DisplayName = "正面 (SPACE)"),
+	Left     UMETA(DisplayName = "左 (A)"),
+	Right    UMETA(DisplayName = "右 (D)"),
+	Red      UMETA(DisplayName = "赤マス (W)")
+};
+
+/** 譜面の音符1つ */
+USTRUCT(BlueprintType)
+struct FStairChartNote
+{
+	GENERATED_BODY()
+
+	/** 位置。単位は「1拍 ÷ ChartSubdivision」 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Note")
+	int32 Slot = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Note")
+	EStairNote Type = EStairNote::Forward;
+
+	bool operator<(const FStairChartNote& O) const { return Slot < O.Slot; }
 };
 
 /** マスの種類 */
@@ -94,13 +126,17 @@ struct FStairSong
 	float Duration = 0.f;
 
 	/**
-	 * ★隕石を降らせる譜面。値は「曲の頭からの拍番号」。
+	 * ★ジャンプの譜面。ここに置いた時刻で跳ぶ。
+	 *   値の単位は「1拍 ÷ ChartSubdivision」（既定4なら 1 = 1/4拍）。
+	 *   4 なら 0,1,2,3 が1拍ぶんで、裏拍や16分の位置にも置ける。
+	 *
 	 *   自動生成ではなく曲ごとに手で置く。
-	 *   デバッグルームでクリックした時刻を最寄りの拍に丸めて記録する。
+	 *   ゲーム中に O で編集モードに入り、クリックした時刻を
+	 *   最寄りのグリッドに丸めて記録する。
 	 *   拍で持つので、BPM を変えても譜面はそのまま追従する。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Song")
-	TArray<int32> MeteorBeats;
+	TArray<FStairChartNote> Notes;
 
 	/** 難易度表示用（1〜5） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Song",

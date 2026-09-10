@@ -32,18 +32,31 @@ public:
 	// ---------------- 入力 ----------------
 
 	/**
-	 * ★A / D は押しっぱなしで方向が決まる。
-	 *   押した瞬間だけでなく、ジャンプする時点で押されていれば効く。
-	 *   事前に長押ししておく遊び方に対応するため。
+	 * ★押したキーがそのまま跳ぶ方向になる。
+	 *   SPACE＝正面 / A＝左 / D＝右。押した瞬間に跳ぶ。
+	 *   以前は A/D を押しっぱなしにして方向を決めていたが、
+	 *   譜面どおりに跳ぶ形になったので、1キー1動作にした。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void SetHeldLeft(bool bHeld);
+	void TryJump(EStairDir InDir = EStairDir::Forward);
 
-	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void SetHeldRight(bool bHeld);
+	/**
+	 * 実際に跳ぶ処理。押した瞬間の再生位置で判定する。
+	 * ★跳んでいる最中の入力は着地まで持ち越すので、
+	 *   「いま」ではなく「押したとき」で判定しないと不当に遅れた扱いになる。
+	 */
+	void ExecuteJump(EStairDir InDir, float PressSongTime);
 
-	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void TryJump();
+	/**
+	 * ★この跳躍の滞空時間を決める。
+	 *
+	 *   基本は Config の JumpFlightTime。ただし着地するまで
+	 *   次のジャンプは受け付けないので、音符が詰まっているところでは
+	 *   次の音符までに必ず着地できるところまで縮める。
+	 *   縮めないと、その音符は押しても反応しない。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	float ComputeFlightTime(bool bFromRed) const;
 
 	// ---------------- 状態 ----------------
 
@@ -168,12 +181,6 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Stair")
 	bool bControlEnabled = false;
 
-	/** A / D の押しっぱなし状態 */
-	UPROPERTY(BlueprintReadOnly, Category = "Stair")
-	bool bHeldLeft = false;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Stair")
-	bool bHeldRight = false;
 
 	// ---- 位置を直接動かすジャンプ ----
 
@@ -203,12 +210,25 @@ protected:
 	UPROPERTY()
 	TSubclassOf<class UAnimInstance> DefaultAnimClass;
 
+	/**
+	 * ★跳んでいる最中に押された入力を1つだけ覚えておく。
+	 *
+	 *   いちばん詰まった譜面では、滞空時間が音符の間隔とほぼ同じになる。
+	 *   着地の直前に押された入力を捨てると、押しているのに跳ばない音符が出る。
+	 *   着地した瞬間に、押した時刻のまま judgement して跳ばせる。
+	 */
+	bool bHasBuffered = false;
+	EStairDir BufferedDir = EStairDir::Forward;
+	float BufferedSongTime = 0.f;
+
+	/** 覚えておく時間の上限（秒）。古すぎる入力は捨てる */
+	UPROPERTY(EditDefaultsOnly, Category = "Stair|Input")
+	float InputBufferSeconds = 0.25f;
+
 	/** 跳躍アニメを再生する／AnimBP に戻す */
 	void PlayJumpAnim();
 	void RestoreAnimBlueprint();
 
-	/** 押されているキーから進行方向を決める */
-	void UpdateDirFromHeld();
 
 	UPROPERTY(BlueprintReadOnly, Category = "Stair")
 	EStairJudge LastJudge = EStairJudge::Miss;

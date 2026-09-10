@@ -7,11 +7,10 @@
 #include "StairMusicClock.h"
 #include "StairWidgets.h"
 #include "StairGameInstance.h"
+#include "StairChartFile.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "StairSpark.h"
-#include "StairMeteor.h"
-#include "StairBullet.h"
 #include "Sound/SoundBase.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -23,6 +22,7 @@
 #include "Components/SkyLightComponent.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "Camera/PlayerCameraManager.h"
 
 AStairGameMode::AStairGameMode()
 {
@@ -36,6 +36,8 @@ AStairGameMode::AStairGameMode()
 
 	MusicClock = CreateDefaultSubobject<UStairMusicClock>(TEXT("MusicClock"));
 	Terrain = CreateDefaultSubobject<UStairTerrain>(TEXT("Terrain"));
+
+	PauseWidgetClass = UStairPauseWidget::StaticClass();
 }
 
 void AStairGameMode::BeginPlay()
@@ -44,26 +46,29 @@ void AStairGameMode::BeginPlay()
 
 	Score = 0;
 	PerfectCount = GreatCount = MissCount = 0;
-	JumpMissCount = ShotMissCount = 0;
+	JumpMissCount = 0;
 	Combo = MaxCombo = 0;
-	NextMeteorIndex = 0;
-	ReloadLeft = 0.f;
-	Meteors.Reset();
-	Charges = Config ? Config->MagazineSize : 3;
 	EndReason = EStairEndReason::None;
 
 	CacheSceneActors();
 
 	// ---- 選ばれた曲を取り出す ----
 	int32 SongIndex = 0;
+	bEndless = false;
+	SongsPlayed = 0;
+	RowShiftTotal = 0;
+
 	if (UStairGameInstance* GI = Cast<UStairGameInstance>(GetGameInstance()))
 	{
 		SongIndex = GI->SelectedSongIndex;
+		bEndless = GI->bEndlessMode;
 	}
-	if (Config && Config->Songs.IsValidIndex(SongIndex))
-	{
-		CurrentSong = Config->Songs[SongIndex];
-	}
+
+	// ★エンドレスは必ず1曲目から。以降は順番に回す
+	if (bEndless) { SongIndex = 0; }
+	EndlessSongIndex = SongIndex;
+
+	LoadSong(SongIndex);
 
 	// ---- 地形 ----
 	if (Terrain)
@@ -73,6 +78,11 @@ void AStairGameMode::BeginPlay()
 		{
 			Terrain->StepClass = AStairStep::StaticClass();
 		}
+
+		// ★譜面の道を先に計算してから地形を作る。
+		//   道の上は必ず足場になり、それ以外はランダムのまま。
+		BuildChartPath();
+
 		Terrain->UpdateAround(0, 0, 0.f);
 	}
 
@@ -85,25 +95,122 @@ void AStairGameMode::BeginPlay()
 	//   これを忘れると、曲選択から入り直したときにキー入力が届かなくなる。
 	RestoreGameInput();
 
-	// ---- 曲を鳴らす。カウントダウンぶん遅らせる ----
-	const float Countdown = Config ? Config->CountdownSeconds : 3.2f;
-	if (MusicClock)
-	{
-		// 環境ごとの音の遅れ補正を渡す
-		MusicClock->SetGlobalOffset(Config ? Config->AudioOffsetMs * 0.001f : 0.f);
-		// ★ゲージの速さ。2 拍で1回の判定にすると連続で跳べる
-		MusicClock->SetBeatScale(Config ? Config->BeatsPerJudge : 2.f);
+	// ★幕（UMG）が出そろうまでの数フレームを、カメラ側でも隠す。
+	//   これが無いと、切り替わった直後に素の画面が一瞬映る。
+	StartScreenFade(FLinearColor::Black);
 
-		// ★まずテンポ合わせ。曲は鳴らさず、時計だけ拍を刻ませる。
-		//   ここで拍を掴んでもらってから、カウントダウン→曲へ進む。
-		MusicClock->StartSong(nullptr, CurrentSong.BPM, 0.f, 0.f);
+	// ---- カウントダウンして曲へ ----
+	//   ★テンポ合わせのフェーズは廃止した。
+	//     画面のサークルワイプが開ききってから少し待ち、
+	//     拍に合わせた 3・2・1 が入り、START と同時に曲が始まる。
+	{
+		const float Beat = 60.f / FMath::Max(1.f, CurrentSong.BPM)
+			* (Config ? Config->BeatsPerJudge : 2.f);
+
+		// 画面が開くのを待つぶん ＋ 3拍ぶん
+		StartCurrentSong((Config ? Config->CountdownLeadSeconds : 1.f) + Beat * 3.f);
 	}
 
-	IntroTaps = 0;
-	IntroLastBeat = -9999;
-	IntroLastGuideBeat = -9999;
+	LastCountdownNumber = 0;
+	SetState(EStairGameState::Countdown);
+}
 
-	SetState(EStairGameState::Intro);
+void AStairGameMode::LoadSong(int32 Index)
+{
+	if (Config && Config->Songs.IsValidIndex(Index))
+	{
+		CurrentSong = Config->Songs[Index];
+	}
+
+	// ★譜面エディタで打ったものがあれば、そちらを使う。
+	//   打ってすぐ試せるようにするため。Config の中身は
+	//   Tools/import_chart.py で焼き込んだ製品版用の控え。
+	if (StairChartFile::Load(Index, CurrentSong.Notes))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[譜面] 書き出し済みを読み込みました（%d 個）: %s"),
+			CurrentSong.Notes.Num(), *StairChartFile::PathFor(Index));
+	}
+
+	NextNoteIndex = 0;
+}
+
+void AStairGameMode::StartCurrentSong(float Lead)
+{
+	if (!MusicClock)
+	{
+		return;
+	}
+
+	MusicClock->SetGlobalOffset(Config ? Config->AudioOffsetMs * 0.001f : 0.f);
+	MusicClock->SetBeatScale(Config ? Config->BeatsPerJudge : 2.f);
+	MusicClock->StartSong(CurrentSong.Sound, CurrentSong.BPM,
+		CurrentSong.BeatOffset, Lead);
+}
+
+bool AStairGameMode::IsBetweenSongs() const
+{
+	// ★曲を1つ以上流し終えたあとだけ。
+	//   1曲目の「まだ鳴っていない」と区別しないと、
+	//   START と同時に押した最初の1歩が弾かれてしまう。
+	return bEndless && SongsPlayed > 0
+		&& State == EStairGameState::Playing
+		&& MusicClock && !MusicClock->HasStarted();
+}
+
+void AStairGameMode::AdvanceEndlessSong()
+{
+	if (!Config || Config->Songs.Num() == 0)
+	{
+		EndGame(EStairEndReason::SongEnd);
+		return;
+	}
+
+	++SongsPlayed;
+
+	// ★曲を順番に回す。最後まで行ったら1曲目へ戻る
+	EndlessSongIndex = (EndlessSongIndex + 1) % Config->Songs.Num();
+	LoadSong(EndlessSongIndex);
+
+	// 地形は完全ランダムのまま。譜面は判定と方向にだけ使う
+	StartCurrentSong(Config->EndlessGapSeconds);
+
+	UE_LOG(LogTemp, Log, TEXT("[エンドレス] %d 曲目: %s"),
+		SongsPlayed + 1, *CurrentSong.Title);
+}
+
+void AStairGameMode::StartScreenFade(const FLinearColor& Color)
+{
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (PC->PlayerCameraManager)
+		{
+			PC->PlayerCameraManager->SetManualCameraFade(1.f, Color, false);
+		}
+	}
+	ScreenFadeHold = Config ? FMath::Max(0.05f, Config->IrisHoldSeconds) : 0.1f;
+}
+
+void AStairGameMode::TickScreenFade(float DeltaSeconds)
+{
+	if (ScreenFadeHold <= 0.f)
+	{
+		return;
+	}
+
+	ScreenFadeHold -= DeltaSeconds;
+	if (ScreenFadeHold > 0.f)
+	{
+		return;
+	}
+
+	// 幕（UMG）が出そろったので、カメラ側の暗転は解く
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (PC->PlayerCameraManager)
+		{
+			PC->PlayerCameraManager->StopCameraFade();
+		}
+	}
 }
 
 AStairCharacter* AStairGameMode::GetPlayerChar() const
@@ -263,12 +370,6 @@ void AStairGameMode::CacheSceneActors()
 
 float AStairGameMode::GetT() const
 {
-	// ★テンポ合わせの最中は曲が鳴っていない。
-	//   ここで時計を進めると、曲が始まる前から残り時間が減ってしまう。
-	if (State == EStairGameState::Intro)
-	{
-		return 0.f;
-	}
 	return MusicClock ? MusicClock->GetT() : 0.f;
 }
 
@@ -277,13 +378,6 @@ float AStairGameMode::GetRemainingTime() const
 	if (!MusicClock)
 	{
 		return 0.f;
-	}
-
-	// ★曲が鳴り始めるまでは満タンのまま止めておく。
-	//   テンポ合わせ中に残り時間が減っていくのは不自然なため。
-	if (State == EStairGameState::Intro)
-	{
-		return MusicClock->GetSongLength();
 	}
 
 	return FMath::Max(0.f,
@@ -308,15 +402,43 @@ FString AStairGameMode::GetCountdownText() const
 // リズム判定。★オーディオ再生位置が基準
 // =====================================================================
 
-EStairJudge AStairGameMode::JudgeNow() const
+float AStairGameMode::GetSongTimeNow() const
+{
+	return MusicClock ? MusicClock->GetSongTime() : 0.f;
+}
+
+float AStairGameMode::GetSignedJudgeOffsetAt(float AtSongTime) const
+{
+	if (!MusicClock)
+	{
+		return 0.f;
+	}
+
+	// ★譜面があるときは「次の音符」との差。
+	//   マイナス＝音符より早い（FAST）、プラス＝遅い（SLOW）。
+	if (HasChart() && State == EStairGameState::Playing
+		&& CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+	{
+		return AtSongTime - NoteTime(NextNoteIndex);
+	}
+	return MusicClock->GetOffsetFromNearestBeat();
+}
+
+float AStairGameMode::GetSignedJudgeOffset() const
+{
+	return GetSignedJudgeOffsetAt(GetSongTimeNow());
+}
+
+EStairJudge AStairGameMode::JudgeAt(float AtSongTime) const
 {
 	if (!MusicClock || !Config)
 	{
 		return EStairJudge::Miss;
 	}
 
-	// 拍からのズレ（秒）→ ミリ秒
-	const float OffsetMs = FMath::Abs(MusicClock->GetOffsetFromNearestBeat()) * 1000.f;
+	// 一定間隔の拍ではなく、置かれた音符どおりに跳ぶゲームにするため。
+	// 譜面が無い曲は従来どおり全拍で跳べる。
+	const float OffsetMs = FMath::Abs(GetSignedJudgeOffsetAt(AtSongTime)) * 1000.f;
 
 	if (OffsetMs <= Config->PerfectWindowMs)
 	{
@@ -327,6 +449,36 @@ EStairJudge AStairGameMode::JudgeNow() const
 		return EStairJudge::Great;
 	}
 	return EStairJudge::Miss;
+}
+
+EStairJudge AStairGameMode::JudgeNow() const
+{
+	return JudgeAt(GetSongTimeNow());
+}
+
+bool AStairGameMode::DoesDirectionMatch(EStairDir Dir) const
+{
+	// ★エンドレスは地形が完全ランダムなので、方向は問わない。
+	//   譜面どおりの向きに跳ぶと穴や壁に突っ込むだけで、
+	//   その通りに叩くと進めなくなってしまう。
+	//   叩くタイミングだけを見る。
+	if (bEndless)
+	{
+		return true;
+	}
+
+	// 譜面が無ければ好きな方向へ跳べる
+	if (!HasChart() || !CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+	{
+		return true;
+	}
+
+	switch (CurrentSong.Notes[NextNoteIndex].Type)
+	{
+	case EStairNote::Left:  return Dir == EStairDir::Left;
+	case EStairNote::Right: return Dir == EStairDir::Right;
+	default:                return Dir == EStairDir::Forward;   // 正面と赤
+	}
 }
 
 float AStairGameMode::GetBeatPhase() const
@@ -385,6 +537,9 @@ void AStairGameMode::Tick(float DeltaSeconds)
 
 	StateTime += DeltaSeconds;
 
+	// 切り替え直後の暗転を、幕が出そろったら解く
+	TickScreenFade(DeltaSeconds);
+
 	// Pawn がまだ取れていなければ取れるまで試す
 	TryInitPlayer();
 
@@ -401,10 +556,6 @@ void AStairGameMode::Tick(float DeltaSeconds)
 
 	switch (State)
 	{
-	case EStairGameState::Intro:
-		UpdateIntro(DeltaSeconds);
-		break;
-
 	case EStairGameState::Countdown:
 		UpdateCountdownSound();
 		if (MusicClock && MusicClock->HasStarted())
@@ -427,26 +578,34 @@ void AStairGameMode::Tick(float DeltaSeconds)
 			P->SetControlEnabled(true);
 		}
 
-		// リロードを進める
-		if (ReloadLeft > 0.f)
-		{
-			ReloadLeft -= DeltaSeconds;
-			if (ReloadLeft <= 0.f)
-			{
-				ReloadLeft = 0.f;
-				Charges = Config ? Config->MagazineSize : 3;
-			}
-		}
-
-		// 譜面にしたがって隕石を落とす
-		UpdateMeteors(DeltaSeconds);
-
 		// 残像とゲージの退場
 		UpdateGaugeState(DeltaSeconds);
 
+		// ★叩かれないまま通り過ぎた音符を落とす。
+		//   ここが「譜面どおりに叩けなかった」唯一の確定点なので、
+		//   コンボを切るのも地形を詰めるのもここで行う。
+		if (HasChart() && Config)
+		{
+			const float Late = Config->GreatWindowMs * 0.001f;
+			while (CurrentSong.Notes.IsValidIndex(NextNoteIndex)
+				&& GetTimeToNextNote() < -Late)
+			{
+				OnNoteMissed(NextNoteIndex);
+				++NextNoteIndex;
+			}
+		}
+
 		if (MusicClock && MusicClock->IsSongFinished())
 		{
-			EndGame(EStairEndReason::SongEnd);
+			// ★エンドレスは曲が終わっても終わらない。次の曲へ移るだけ
+			if (bEndless)
+			{
+				AdvanceEndlessSong();
+			}
+			else
+			{
+				EndGame(EStairEndReason::SongEnd);
+			}
 		}
 		break;
 	}
@@ -466,6 +625,13 @@ void AStairGameMode::Tick(float DeltaSeconds)
 void AStairGameMode::EndGame(EStairEndReason Reason)
 {
 	if (State == EStairGameState::Finished || State == EStairGameState::Result)
+	{
+		return;
+	}
+
+	// ★譜面の打ち込み中は終わらせない。
+	//   曲を最後まで流し続けられないと、後半の譜面が打てない。
+	if (bCharting)
 	{
 		return;
 	}
@@ -501,10 +667,13 @@ void AStairGameMode::NotifyLandedOn(AStairStep* Step)
 	{
 		return;
 	}
-	Score = FMath::Max(Score, Step->Row);
+	// ★MISS で行を詰めた回数を足し戻す。
+	//   詰めると足場の Row が振り直されるので、そのままでは
+	//   のぼった段数が目減りしてしまう。
+	Score = FMath::Max(Score, Step->Row + RowShiftTotal);
 }
 
-void AStairGameMode::NotifyJudge(EStairJudge Judge)
+void AStairGameMode::NotifyJudge(EStairJudge Judge, float SignedOffset)
 {
 	if (State != EStairGameState::Playing)
 	{
@@ -517,6 +686,18 @@ void AStairGameMode::NotifyJudge(EStairJudge Judge)
 	default: break; // MISS は NotifyMissOnCurrentStep で数える
 	}
 
+	// ★早かったか遅かったかを覚えておく。GREAT の FAST／SLOW 表示に使う
+	LastJudgeOffset = SignedOffset;
+
+	// ★叩いた音符はその場で消費する。
+	//   残したままだと、判定窓のあいだに続けて押したとき
+	//   同じ音符が二度取れてしまう。
+	if (HasChart() && Judge != EStairJudge::Miss && Config
+		&& FMath::Abs(SignedOffset) <= Config->GreatWindowMs * 0.001f)
+	{
+		++NextNoteIndex;
+	}
+
 	UpdateCombo(Judge);
 
 	// ★押した位置を残像として覚えておく。
@@ -524,7 +705,7 @@ void AStairGameMode::NotifyJudge(EStairJudge Judge)
 	if (MusicClock)
 	{
 		FStairGhost G;
-		G.Phase = MusicClock->GetBeatPhase();
+		G.Offset = LastJudgeOffset;
 		G.Age = 0.f;
 		G.Judge = Judge;
 		Ghosts.Insert(G, 0);
@@ -545,93 +726,334 @@ void AStairGameMode::ChartToggle()
 {
 	bCharting = !bCharting;
 
+	// ★打ち込み中はゲームを止める。
+	//   跳ばせたままだと、聴きながら置く作業と操作が両立せず、
+	//   落ちた瞬間に曲が止まって最後まで打てない。
+	if (AStairCharacter* P = GetPlayerChar())
+	{
+		P->SetControlEnabled(!bCharting);
+	}
+
 	if (bCharting)
 	{
 		// いま選んでいる曲の譜面を読み込んで、続きから打てるようにする
-		ChartBeats = CurrentSong.MeteorBeats;
+		ChartNotes = CurrentSong.Notes;
+
+		// ★打ち込み中は全部床にする。穴や壁があると置きたい位置まで進めない
+		if (Terrain)
+		{
+			Terrain->bAllFloor = true;
+			Terrain->ClearChartPath();
+		}
+
 		UE_LOG(LogTemp, Warning,
-			TEXT("[譜面] 編集を開始。既存 %d 個。左クリックで置く / BackSpace で取消 / P で書き出し"),
-			ChartBeats.Num());
+			TEXT("[譜面] 編集開始。既存 %d 個。SPACE=正面 A=左 D=右 W=赤 / BackSpace 取消 / P 書き出し / O 終了"),
+			ChartNotes.Num());
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[譜面] 編集を終了"));
+		if (Terrain)
+		{
+			Terrain->bAllFloor = false;
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[譜面] 編集終了。ゲームを再開します"));
 	}
 }
 
+float AStairGameMode::NoteTime(int32 Index) const
+{
+	if (!MusicClock || !Config || !CurrentSong.Notes.IsValidIndex(Index))
+	{
+		return BIG_NUMBER;
+	}
+	const int32 Sub = FMath::Max(1, Config->ChartSubdivision);
+	const float Beat = MusicClock->GetBeatDuration();
+	return (float(CurrentSong.Notes[Index].Slot) / Sub) * Beat + CurrentSong.BeatOffset;
+}
+
+float AStairGameMode::GetTimeToNextNote() const
+{
+	if (!MusicClock || !HasChart())
+	{
+		return BIG_NUMBER;
+	}
+	if (!CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+	{
+		return BIG_NUMBER;
+	}
+	return NoteTime(NextNoteIndex) - MusicClock->GetSongTime();
+}
+
+float AStairGameMode::GetNoteTimeFromNow(int32 Index) const
+{
+	if (!MusicClock || !CurrentSong.Notes.IsValidIndex(Index))
+	{
+		return BIG_NUMBER;
+	}
+	return NoteTime(Index) - MusicClock->GetSongTime();
+}
+
+EStairNote AStairGameMode::GetNoteType(int32 Index) const
+{
+	return CurrentSong.Notes.IsValidIndex(Index)
+		? CurrentSong.Notes[Index].Type : EStairNote::Forward;
+}
+
+int32 AStairGameMode::GetStepsPerNote() const
+{
+	if (!Config)
+	{
+		return 1;
+	}
+	return FMath::Max(1, bEndless
+		? Config->EndlessStepsPerNote : Config->ChartStepsPerNote);
+}
+
+bool AStairGameMode::TryStartFromCountdown()
+{
+	if (State != EStairGameState::Countdown || !MusicClock || !Config)
+	{
+		return false;
+	}
+
+	// ★START のちょうど手前で押されたら、そこから遊びを始める。
+	//   曲が鳴り出すのを Tick で待っていたので、
+	//   START と同時に押した1歩めが空押し扱いで捨てられていた。
+	const float Left = MusicClock->GetCountdownRemaining();
+	if (Left > Config->GreatWindowMs * 0.001f)
+	{
+		return false;   // まだ早い。空押しとして拍を確かめるだけ
+	}
+
+	SetState(EStairGameState::Playing);
+	return true;
+}
+
+float AStairGameMode::GetNextNoteWindow() const
+{
+	if (!MusicClock || !Config || !HasChart())
+	{
+		return BIG_NUMBER;
+	}
+
+	// ★いま押したのが「NextNoteIndex の音符を叩いた」のか、
+	//   それとも音符と音符のあいだの空押しなのかで、
+	//   次に押さなければならない音符が変わる。
+	const float ToNext = GetTimeToNextNote();
+	const float Great = Config->GreatWindowMs * 0.001f;
+
+	const int32 Target = (FMath::Abs(ToNext) <= Great)
+		? NextNoteIndex + 1   // いまの音符を叩いた。次はその先
+		: NextNoteIndex;      // 外した。狙うべきはまだこの音符
+
+	if (!CurrentSong.Notes.IsValidIndex(Target))
+	{
+		return BIG_NUMBER;    // これが最後。急ぐ必要はない
+	}
+
+	// ★「いまから」何秒あるか。遅れて押したぶんは短くなる
+	return FMath::Max(0.f, GetNoteTimeFromNow(Target));
+}
+
+EStairNote AStairGameMode::GetNextNoteType() const
+{
+	if (CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+	{
+		return CurrentSong.Notes[NextNoteIndex].Type;
+	}
+	return EStairNote::Forward;
+}
+
+void AStairGameMode::BuildChartPath()
+{
+	if (!Terrain || !Config)
+	{
+		return;
+	}
+
+	// ★エンドレスは地形を完全ランダムにする。譜面は判定と方向にだけ使う
+	if (!HasChartRoad())
+	{
+		Terrain->ClearChartPath();
+		Terrain->ClearLaneBounds();
+		return;
+	}
+
+	// ★譜面のとおりに跳んだときに通る道を、先に全部たどっておく。
+	//   譜面どおりに PERFECT を出せば、必ずここを通って進める。
+	//
+	//   進む段数は音符の種類だけで決まる。判定（PERFECT/GREAT）では
+	//   変えない。変えてしまうと着地点が二通りになり、
+	//   「譜面どおりに進む道」が定まらなくなるため。
+	TMap<int64, EStairTile> Path;    // 必ず足場にするマス
+	TSet<int64> Clear;               // 壁を置いてはいけないマス
+	TSet<int32> RedRows;             // 横一列すべてを赤にする行
+	TSet<int32> HoleRows;            // 赤から跳び越す谷。丸ごと穴にする行
+
+	int32 Row = 0;
+	int32 Lane = 0;
+	int32 MinLane = 0;
+	int32 MaxLane = 0;
+
+	// 出発点
+	Path.Add(UStairTerrain::MakeKey(Row, Lane), EStairTile::Normal);
+
+	const int32 Steps = GetStepsPerNote();
+
+	for (const FStairChartNote& N : CurrentSong.Notes)
+	{
+		if (N.Type == EStairNote::Red)
+		{
+			// ★赤は「いま立っている行が赤で、そこから5段先へ跳ぶ」という意味。
+			//   その行は横一列すべてを赤にする。
+			//   長距離ジャンプの踏切であることが遠目にも分かるようにするため。
+			RedRows.Add(Row);
+
+			// ★踏切から着地点の手前までは丸ごと穴。
+			//   跳び越えるための谷を見せて、5段跳びの理由を分からせる。
+			for (int32 R = Row + 1; R < Row + Config->RedSteps; ++R)
+			{
+				HoleRows.Add(R);
+			}
+
+			Row += Config->RedSteps;
+		}
+		else
+		{
+			const int32 NextLane = Lane
+				+ ((N.Type == EStairNote::Left) ? -1
+				: (N.Type == EStairNote::Right) ? 1 : 0);
+
+			// ★まっすぐ跳ぶときだけ、途中の段に壁があると引っかかる。
+			//   斜めは桂馬の動きで回り込むので、途中の段は気にしなくてよい。
+			if (NextLane == Lane)
+			{
+				for (int32 R = Row + 1; R < Row + Steps; ++R)
+				{
+					Clear.Add(UStairTerrain::MakeKey(R, Lane));
+				}
+			}
+
+			Row += Steps;
+			Lane = NextLane;
+		}
+
+		// 着地点
+		const int64 K = UStairTerrain::MakeKey(Row, Lane);
+		if (!Path.Contains(K))
+		{
+			Path.Add(K, EStairTile::Normal);
+		}
+
+		MinLane = FMath::Min(MinLane, Lane);
+		MaxLane = FMath::Max(MaxLane, Lane);
+	}
+
+	Terrain->SetChartPath(Path, Clear, RedRows, HoleRows);
+
+	// ★横は譜面が使う幅ぶんだけ。無限に広げても見えないうえに重くなる
+	const int32 Margin = FMath::Max(0, Config->ChartLaneMargin);
+	Terrain->SetLaneBounds(MinLane - Margin, MaxLane + Margin);
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[譜面] 音符 %d 個 → 足場 %d マス / 赤 %d 行 / 谷 %d 行 / レーン %d〜%d"),
+		CurrentSong.Notes.Num(), Path.Num(), RedRows.Num(), HoleRows.Num(),
+		MinLane - Margin, MaxLane + Margin);
+}
+
 void AStairGameMode::ChartPlace()
+{
+	ChartPlaceTyped(EStairNote::Forward);
+}
+
+void AStairGameMode::ChartPlaceTyped(EStairNote Type)
 {
 	if (!bCharting || !MusicClock)
 	{
 		return;
 	}
 
-	// ★クリックした時刻を最寄りの拍に丸める。
-	//   多少ずれて押しても、譜面としては拍ぴったりになる。
-	const int32 Beat = FMath::RoundToInt(MusicClock->GetBeatPosition());
+	// ★押した時刻を最寄りの位置に丸める。
+	//   1拍を ChartSubdivision で割った細かさなので、裏拍にも置ける。
+	const int32 Sub = Config ? FMath::Max(1, Config->ChartSubdivision) : 4;
+	const int32 Slot = FMath::RoundToInt(MusicClock->GetBeatPosition() * Sub);
 
-	if (ChartBeats.Contains(Beat))
+	// 同じ位置には1つだけ。押し直したら種類を差し替える
+	for (FStairChartNote& N : ChartNotes)
 	{
-		return;   // 同じ拍に二重に置かない
+		if (N.Slot == Slot)
+		{
+			N.Type = Type;
+			return;
+		}
 	}
 
-	ChartBeats.Add(Beat);
-	ChartBeats.Sort();
+	FStairChartNote N;
+	N.Slot = Slot;
+	N.Type = Type;
+	ChartNotes.Add(N);
+	ChartNotes.Sort();
 
 	PlaySystemSound(Config ? Config->CountdownSound : nullptr);
-	UE_LOG(LogTemp, Warning, TEXT("[譜面] 拍 %d に配置（計 %d 個）"),
-		Beat, ChartBeats.Num());
+
+	static const TCHAR* Names[] = { TEXT("正面"), TEXT("左"), TEXT("右"), TEXT("赤") };
+	UE_LOG(LogTemp, Warning, TEXT("[譜面] %d 拍目 %d/%d に %s（計 %d 個）"),
+		Slot / Sub, Slot % Sub, Sub, Names[(int32)Type], ChartNotes.Num());
 }
 
 void AStairGameMode::ChartUndo()
 {
-	if (!bCharting || ChartBeats.Num() == 0)
+	if (!bCharting || ChartNotes.Num() == 0)
 	{
 		return;
 	}
 
-	// 直前に置いたもの＝いまの時刻にいちばん近いものを消す
-	int32 Best = 0;
+	// いまの時刻にいちばん近いものを消す
+	const int32 Sub = Config ? FMath::Max(1, Config->ChartSubdivision) : 4;
+	int32 Best = ChartNotes.Num() - 1;
+
 	if (MusicClock)
 	{
-		const float Now = MusicClock->GetBeatPosition();
+		const float Now = MusicClock->GetBeatPosition() * Sub;
 		float BestDiff = BIG_NUMBER;
-		for (int32 i = 0; i < ChartBeats.Num(); ++i)
+		for (int32 i = 0; i < ChartNotes.Num(); ++i)
 		{
-			const float D = FMath::Abs(ChartBeats[i] - Now);
+			const float D = FMath::Abs(ChartNotes[i].Slot - Now);
 			if (D < BestDiff) { BestDiff = D; Best = i; }
 		}
 	}
-	else
-	{
-		Best = ChartBeats.Num() - 1;
-	}
 
-	UE_LOG(LogTemp, Warning, TEXT("[譜面] 拍 %d を取消（残り %d 個）"),
-		ChartBeats[Best], ChartBeats.Num() - 1);
-	ChartBeats.RemoveAt(Best);
+	UE_LOG(LogTemp, Warning, TEXT("[譜面] %d 拍目を取消（残り %d 個）"),
+		ChartNotes[Best].Slot / Sub, ChartNotes.Num() - 1);
+	ChartNotes.RemoveAt(Best);
 }
 
 void AStairGameMode::ChartExport()
 {
-	if (ChartBeats.Num() == 0)
+	if (ChartNotes.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[譜面] 空なので書き出しません"));
 		return;
 	}
 
+	// 「位置:種類」の並びにする。種類は F/L/R/X
+	static const TCHAR* Codes[] = { TEXT("F"), TEXT("L"), TEXT("R"), TEXT("X") };
+
 	FString Line;
-	for (int32 i = 0; i < ChartBeats.Num(); ++i)
+	for (int32 i = 0; i < ChartNotes.Num(); ++i)
 	{
-		Line += FString::FromInt(ChartBeats[i]);
-		if (i < ChartBeats.Num() - 1) { Line += TEXT(","); }
+		Line += FString::Printf(TEXT("%d:%s"),
+			ChartNotes[i].Slot, Codes[(int32)ChartNotes[i].Type]);
+		if (i < ChartNotes.Num() - 1) { Line += TEXT(","); }
 	}
 
-	const FString Text = FString::Printf(
-		TEXT("曲: %s\nBPM: %.2f\n拍数: %d\nMeteorBeats:\n%s\n"),
-		*CurrentSong.Title, CurrentSong.BPM, ChartBeats.Num(), *Line);
+	const int32 Sub = Config ? FMath::Max(1, Config->ChartSubdivision) : 4;
 
-	// プロジェクト直下に書き出す。DataAsset へは手で貼るか Python で流し込む
+	const FString Text = FString::Printf(
+		TEXT("曲: %s\nBPM: %.2f\n分割: 1拍を %d 分割\n個数: %d\n")
+		TEXT("種類: F=正面 L=左 R=右 X=赤マス\nNotes:\n%s\n"),
+		*CurrentSong.Title, CurrentSong.BPM, Sub, ChartNotes.Num(), *Line);
+
 	const FString Path = FPaths::ProjectSavedDir()
 		/ TEXT("Chart_") / (CurrentSong.Title + TEXT(".txt"));
 
@@ -648,13 +1070,15 @@ FString AStairGameMode::GetChartText() const
 		return FString();
 	}
 
-	const int32 Beat = MusicClock
-		? FMath::RoundToInt(MusicClock->GetBeatPosition()) : 0;
+	const int32 Sub = Config ? FMath::Max(1, Config->ChartSubdivision) : 4;
+	const int32 Slot = MusicClock
+		? FMath::RoundToInt(MusicClock->GetBeatPosition() * Sub) : 0;
 
 	return FString::Printf(
-		TEXT("譜面編集中　拍 %d　置いた数 %d\n")
-		TEXT("左クリック=置く　BackSpace=取消　P=書き出し　O=終了"),
-		Beat, ChartBeats.Num());
+		TEXT("譜面編集中　%d 拍目 %d/%d　置いた数 %d\n")
+		TEXT("SPACE=正面　A=左　D=右　W=赤マス\n")
+		TEXT("BackSpace=取消　P=書き出し　O=終了"),
+		Slot / Sub, Slot % Sub, Sub, ChartNotes.Num());
 }
 
 void AStairGameMode::UpdateCharting()
@@ -665,10 +1089,21 @@ void AStairGameMode::UpdateCharting()
 		return;
 	}
 
-	// O で編集モードの出入り
+	// ★編集モードに入れるのはカウントダウン中だけ。
+	//   プレイ中に切り替えられると、遊んでいる最中に地形が
+	//   全床へ変わってしまい、何が起きたか分からなくなる。
+	//   抜けるのはいつでもできるようにしておく。
 	if (PC->WasInputKeyJustPressed(EKeys::O))
 	{
-		ChartToggle();
+		if (bCharting || State == EStairGameState::Countdown)
+		{
+			ChartToggle();
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[譜面] 編集に入れるのはカウントダウン中だけです"));
+		}
 	}
 
 	if (!bCharting)
@@ -676,62 +1111,70 @@ void AStairGameMode::UpdateCharting()
 		return;
 	}
 
+	// ★音符の種類はキーで決める。
+	//   実際に遊ぶときの操作と同じキーにしておくと、
+	//   打ち込みながら「どう跳ぶか」がそのまま身につく。
+	if (PC->WasInputKeyJustPressed(EKeys::SpaceBar)) { ChartPlaceTyped(EStairNote::Forward); }
+	if (PC->WasInputKeyJustPressed(EKeys::A))        { ChartPlaceTyped(EStairNote::Left); }
+	if (PC->WasInputKeyJustPressed(EKeys::D))        { ChartPlaceTyped(EStairNote::Right); }
+	if (PC->WasInputKeyJustPressed(EKeys::W))        { ChartPlaceTyped(EStairNote::Red); }
+
 	if (PC->WasInputKeyJustPressed(EKeys::BackSpace)) { ChartUndo(); }
 	if (PC->WasInputKeyJustPressed(EKeys::P))         { ChartExport(); }
 }
 
-// =====================================================================
-// イントロ（テンポ合わせ）
-// =====================================================================
-
-int32 AStairGameMode::GetIntroNeeded() const
+void AStairGameMode::TogglePause()
 {
-	return Config ? FMath::Max(1, Config->IntroTapCount) : 5;
-}
-
-FString AStairGameMode::GetIntroText() const
-{
-	if (State != EStairGameState::Intro)
-	{
-		return FString();
-	}
-	return FString::Printf(
-		TEXT("テンポに合わせて SPACE を %d回\n%d / %d"),
-		GetIntroNeeded(), IntroTaps, GetIntroNeeded());
-}
-
-void AStairGameMode::NotifyIntroTap()
-{
-	if (State != EStairGameState::Intro || !MusicClock || !Config)
+	APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
+	if (!PC)
 	{
 		return;
 	}
 
-	// ★判定は本編と同じ窓を使う。PERFECT でも GREAT でも成功とする。
-	//   始める前に厳しくすると、詰まって先へ進めなくなるため。
-	const EStairJudge Judge = JudgeNow();
-	const int32 BeatIndex = FMath::RoundToInt(MusicClock->GetBeatPosition());
-
-	if (Judge == EStairJudge::Miss)
+	if (State == EStairGameState::Paused)
 	{
-		if (Config->bIntroResetOnMiss)
+		// ---- 再開 ----
+		State = StateBeforePause;
+
+		if (PauseWidget)
 		{
-			IntroTaps = 0;
-			IntroLastBeat = -9999;
+			PauseWidget->RemoveFromParent();
+			PauseWidget = nullptr;
 		}
-		PlaySystemSound(Config->WarningSound);
+
+		UGameplayStatics::SetGamePaused(this, false);
+		if (MusicClock) { MusicClock->SetPaused(false); }
+		RestoreGameInput();
 		return;
 	}
 
-	// 同じ拍で二重に数えない
-	if (BeatIndex == IntroLastBeat)
+	// ポーズできるのは遊んでいる最中だけ
+	if (State != EStairGameState::Playing && State != EStairGameState::Countdown)
 	{
 		return;
 	}
 
-	IntroLastBeat = BeatIndex;
-	++IntroTaps;
-	PlaySystemSound(Config->CountdownSound);
+	// ---- 止める ----
+	StateBeforePause = State;
+	State = EStairGameState::Paused;
+
+	if (MusicClock) { MusicClock->SetPaused(true); }
+
+	if (!PauseWidgetClass)
+	{
+		PauseWidgetClass = UStairPauseWidget::StaticClass();
+	}
+	PauseWidget = CreateWidget<UUserWidget>(PC, PauseWidgetClass);
+	if (PauseWidget)
+	{
+		PauseWidget->AddToViewport(50);
+		UWidgetBlueprintLibrary::SetInputMode_UIOnlyEx(
+			PC, PauseWidget, EMouseLockMode::DoNotLock);
+		PC->bShowMouseCursor = true;
+	}
+
+	// ★ゲームを止める。Tick が来なくなるので曲の位置も保たれる
+	UGameplayStatics::SetGamePaused(this, true);
 }
 
 void AStairGameMode::NotifyPracticeTap()
@@ -743,7 +1186,7 @@ void AStairGameMode::NotifyPracticeTap()
 
 	// 進みはしない。押した位置だけ残像に残して、拍を確かめられるようにする
 	FStairGhost G;
-	G.Phase = MusicClock->GetBeatPhase();
+	G.Offset = GetSignedJudgeOffset();
 	G.Age = 0.f;
 	G.Judge = JudgeNow();
 	Ghosts.Insert(G, 0);
@@ -754,7 +1197,6 @@ void AStairGameMode::NotifyPracticeTap()
 		Ghosts.SetNum(Keep);
 	}
 
-	// 判定に応じて音を鳴らす。ジャンプ音のピッチ違いを流用する
 	if (Config->JumpSound)
 	{
 		float Pitch = Config->JumpPitchGreat;
@@ -763,53 +1205,6 @@ void AStairGameMode::NotifyPracticeTap()
 
 		UGameplayStatics::PlaySound2D(this, Config->JumpSound,
 			Config->JumpSoundVolume * 0.6f, Pitch);
-	}
-}
-
-void AStairGameMode::UpdateIntro(float DeltaSeconds)
-{
-	if (!MusicClock || !Config)
-	{
-		return;
-	}
-
-	// ---- 拍ごとにガイド音を鳴らす ----
-	const float Phase = MusicClock->GetBeatPhase();
-
-	// ★位相が1周して0へ戻った瞬間＝拍のジャスト。
-	//   「位相が0.25未満なら鳴らす」だと、拍から最大で1/4拍ぶん遅れて
-	//   鳴ってしまい、手拍子がずれて聞こえる。折り返しを見て1フレーム内で鳴らす。
-	const bool bCrossed = (Phase < IntroPrevPhase - 0.5f);
-	IntroPrevPhase = Phase;
-
-	if (bCrossed)
-	{
-		if (Config->IntroClapSound)
-		{
-			UGameplayStatics::PlaySound2D(this, Config->IntroClapSound,
-				Config->IntroClapVolume);
-		}
-		else
-		{
-			PlaySystemSound(Config->ButtonSound);
-		}
-	}
-
-	// ---- 押し終わったら、拍に合わせたカウントダウンへ ----
-	if (IntroTaps >= GetIntroNeeded())
-	{
-		// ★カウントダウンも曲のテンポで刻む。
-		//   拍の間隔ちょうどで 3・2・1 が入るよう、開始を拍に合わせる。
-		const float Beat = MusicClock->GetBeatDuration();
-		const float Countdown = Beat * 3.f;
-
-		MusicClock->SetGlobalOffset(Config->AudioOffsetMs * 0.001f);
-		MusicClock->SetBeatScale(Config->BeatsPerJudge);
-		MusicClock->StartSong(CurrentSong.Sound, CurrentSong.BPM,
-			CurrentSong.BeatOffset, Countdown);
-
-		LastCountdownNumber = 0;
-		SetState(EStairGameState::Countdown);
 	}
 }
 
@@ -826,286 +1221,85 @@ void AStairGameMode::UpdateGaugeState(float DeltaSeconds)
 		}
 	}
 
-	// ---- 一定の段数までのぼったらゲージを去らせる ----
-	if (GaugeExitAlpha >= 1.f)
-	{
-		return;   // 一度去ったら戻さない
-	}
-
-	const int32 ExitRow = Config ? Config->GaugeExitRow : 50;
-	AStairCharacter* P = GetPlayerChar();
-
-	if (GaugeExitAlpha > 0.f || (P && P->GetCurrentRow() >= ExitRow))
-	{
-		const float Sec = Config ? FMath::Max(0.05f, Config->GaugeExitSeconds) : 0.9f;
-		GaugeExitAlpha = FMath::Min(1.f, GaugeExitAlpha + DeltaSeconds / Sec);
-	}
+	// ★ゲージは最後まで出しっぱなしにする。
+	//   タイミングを体で覚えるゲームではなく、譜面を読む音ゲーになったので、
+	//   途中で消すと何を見て跳べばよいのか分からなくなる。
 }
 
-// =====================================================================
-// 射撃
-// =====================================================================
-
-float AStairGameMode::GetReloadProgress() const
+void AStairGameMode::CollapseRows(int32 Count, bool bClearRedUnderPlayer)
 {
-	const float Total = Config ? Config->ReloadSeconds : 2.f;
-	if (Total <= 0.f || ReloadLeft <= 0.f)
-	{
-		return 1.f;
-	}
-	return FMath::Clamp(1.f - (ReloadLeft / Total), 0.f, 1.f);
-}
-
-AStairMeteor* AStairGameMode::FindShotTarget() const
-{
-	AStairCharacter* P = GetPlayerChar();
-	if (!P || !Config)
-	{
-		return nullptr;
-	}
-
-	// ★射程は「足場で言う1段上まで」。早撃ちしても届かない。
-	//   遠くの隕石は狙えないので、撃つのはタイミングを合わせる行為になる。
-	const float Reach = Config->StepDepth * (Config->BulletRangeRows + 0.75f);
-	const FVector Origin = P->GetActorLocation();
-
-	AStairMeteor* Best = nullptr;
-	float BestDiff = BIG_NUMBER;
-
-	for (AStairMeteor* M : Meteors)
-	{
-		if (!M || !M->IsAlive())
-		{
-			continue;
-		}
-		if (FVector::Dist(Origin, M->GetActorLocation()) > Reach)
-		{
-			continue;
-		}
-
-		// 判定に最も近いもの（＝いちばん撃ち頃）を選ぶ
-		const float Diff = FMath::Abs(1.f - M->GetApproach());
-		if (Diff < BestDiff)
-		{
-			BestDiff = Diff;
-			Best = M;
-		}
-	}
-	return Best;
-}
-
-void AStairGameMode::FireShot()
-{
-	// ★譜面編集中は、左クリックが「置く」操作になる
-	if (bCharting)
-	{
-		ChartPlace();
-		return;
-	}
-
-	if (State != EStairGameState::Playing || !Config)
+	// ★譜面どおりの道を敷いているときだけ。
+	//   エンドレスは完全ランダムなので、合わせ直す相手がいない。
+	if (!HasChartRoad() || !Terrain || !Config || Count <= 0)
 	{
 		return;
-	}
-	if (ReloadLeft > 0.f)
-	{
-		return;   // リロード中は撃てない
 	}
 
 	AStairCharacter* P = GetPlayerChar();
-	UWorld* World = GetWorld();
-	if (!P || !World)
+	if (!P)
 	{
 		return;
 	}
 
-	AStairMeteor* Target = FindShotTarget();
-	const EStairJudge Judge = Target ? Target->JudgeShot() : EStairJudge::Miss;
+	const int32 Row = P->GetCurrentRow();
 
-	// ---- 弾を出す ----
-	FActorSpawnParameters SP;
-	SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	const FVector Muzzle = P->GetActorLocation() + FVector(0.f, 0.f, 40.f);
-	if (AStairBullet* B = World->SpawnActor<AStairBullet>(
-		AStairBullet::StaticClass(), Muzzle, FRotator::ZeroRotator, SP))
+	// ★赤の音符を落としたときは、足元が赤のまま残る。
+	//   放っておくと次のジャンプも5段になって永久にずれるので解除する。
+	if (bClearRedUnderPlayer)
 	{
-		B->SetBulletScale(Config->BulletScale);
-		// 当たる場合だけ誘導する。外したら素通りさせて見た目で分かるようにする
-		B->Fire(Judge != EStairJudge::Miss ? Target : nullptr,
-			FVector::ForwardVector, Config->BulletSpeed);
+		Terrain->ClearRedRow(Row);
 	}
 
-	PlaySystemSound(Config->JumpSound);
+	const int32 Front = Row + 1;
 
-	// ---- チャージの増減 ----
-	if (Judge == EStairJudge::Miss)
+	for (int32 i = 0; i < Count; ++i)
 	{
-		// ★外すとチャージが減る。3回外すとリロード。
-		++MissCount;
-		++ShotMissCount;
-		Combo = 0;
-		LastComboBeat = -9999;
-
-		--Charges;
-		if (Charges <= 0)
-		{
-			Charges = 0;
-			ReloadLeft = Config->ReloadSeconds;
-		}
-	}
-	else
-	{
-		// ★当てるとチャージが満タンに戻る。当て続ければ撃ち続けられる
-		if (Judge == EStairJudge::Perfect) { ++PerfectCount; }
-		else                               { ++GreatCount; }
-
-		Charges = Config->MagazineSize;
+		Terrain->CollapseRow(Front);
+		++RowShiftTotal;
 	}
 }
 
-// =====================================================================
-// 隕石
-// =====================================================================
-
-void AStairGameMode::UpdateMeteors(float DeltaSeconds)
+void AStairGameMode::OnNoteMissed(int32 Index)
 {
-	UWorld* World = GetWorld();
-	if (!World || !Config || !MusicClock || !Terrain)
+	if (State != EStairGameState::Playing)
 	{
 		return;
 	}
 
-	// ---- 譜面を見て、猶予ぶん手前で落とし始める ----
-	const float Beat = MusicClock->GetBeatDuration();
-	const float Now = MusicClock->GetSongTime();
-
-	while (CurrentSong.MeteorBeats.IsValidIndex(NextMeteorIndex))
-	{
-		const int32 BeatIndex = CurrentSong.MeteorBeats[NextMeteorIndex];
-		const float ImpactTime = BeatIndex * Beat + CurrentSong.BeatOffset;
-
-		// 着弾の MeteorLeadSeconds 前に出す
-		if (Now < ImpactTime - Config->MeteorLeadSeconds)
-		{
-			break;
-		}
-		++NextMeteorIndex;
-
-		AStairCharacter* P = GetPlayerChar();
-		if (!P)
-		{
-			continue;
-		}
-
-		// 着弾点はプレイヤーの少し先。斜めに落ちてくる
-		const FVector Aim = Terrain->GetStepLocation(
-			P->GetCurrentRow() + 1, P->GetCurrentLane()) + FVector(0.f, 0.f, 60.f);
-
-		const FVector SpawnAt = Aim
-			+ Config->MeteorSpawnOffset
-			+ FVector(0.f, 0.f, Config->MeteorSpawnHeight);
-
-		FActorSpawnParameters SP;
-		SP.SpawnCollisionHandlingOverride =
-			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-		if (AStairMeteor* M = World->SpawnActor<AStairMeteor>(
-			AStairMeteor::StaticClass(), SpawnAt, FRotator::ZeroRotator, SP))
-		{
-			M->SetJudgeWidths(Config->ShotPerfectWidth, Config->ShotGreatWidth);
-			M->SetSpin(Config->MeteorSpin);
-			M->SetMeteorScale(Config->MeteorScale);
-			M->Launch(Aim, Config->MeteorLeadSeconds);
-			Meteors.Add(M);
-		}
-	}
-
-	// ---- 着弾したものを処理し、片付ける ----
-	for (int32 i = Meteors.Num() - 1; i >= 0; --i)
-	{
-		AStairMeteor* M = Meteors[i];
-		if (!M || !IsValid(M))
-		{
-			Meteors.RemoveAt(i);
-			continue;
-		}
-		if (!M->IsAlive())
-		{
-			Meteors.RemoveAt(i);
-			continue;
-		}
-		if (M->HasImpacted())
-		{
-			HandleMeteorImpact(M);
-			Meteors.RemoveAt(i);
-			M->Destroy();
-		}
-	}
-}
-
-void AStairGameMode::HandleMeteorImpact(AStairMeteor* M)
-{
-	AStairCharacter* P = GetPlayerChar();
-	UWorld* World = GetWorld();
-	if (!P || !Terrain || !Config || !World)
-	{
-		return;
-	}
-
-	// ★撃ち漏らしは「足元」ではなく「この先の道」を削る。
-	//   撃ち漏らすほど進路に穴が増えて、後で避けきれなくなる。
 	++MissCount;
-	++ShotMissCount;
+	++JumpMissCount;
+
+	// ★譜面どおりに叩けなかったのでコンボは切れる。
+	//   立ち止まっていても切れるよう、判定ではなくここで切る。
 	Combo = 0;
 	LastComboBeat = -9999;
 
-	const int32 PRow = P->GetCurrentRow();
-	const int32 PLane = P->GetCurrentLane();
-	const int32 Spread = FMath::Max(0, Config->MeteorBreakLaneSpread);
+	// 見逃した音符ぶんだけ地形を詰めて、この先の譜面と合わせ直す
+	const bool bRed = (GetNoteType(Index) == EStairNote::Red);
 
-	// 2〜5段先の、足場が実在するマスから選ぶ。画面内で壊れるようにする
-	TArray<TPair<int32, int32>> Cands;
-	for (int32 dr = Config->MeteorBreakRowMin; dr <= Config->MeteorBreakRowMax; ++dr)
-	{
-		for (int32 dl = -Spread; dl <= Spread; ++dl)
-		{
-			const int32 R = PRow + dr;
-			const int32 L = PLane + dl;
-			if (Terrain->HasLandableStep(R, L))
-			{
-				Cands.Add(TPair<int32, int32>(R, L));
-			}
-		}
-	}
+	// ★次の音符も赤なら、足元の赤は残す。
+	//
+	//   赤が続く区間では、次の赤マスへ跳ぶための踏切がそのまま要る。
+	//   ここで赤を解除すると1段しか跳べなくなり、
+	//   目の前の谷に落ちるか、跳べずに詰んでしまう。
+	//   赤のまま残せば、次の赤の音符でそのまま次の赤マスまで跳んでいける。
+	const bool bNextRed = CurrentSong.Notes.IsValidIndex(Index + 1)
+		&& (GetNoteType(Index + 1) == EStairNote::Red);
 
-	if (Cands.Num() == 0)
-	{
-		return;
-	}
+	CollapseRows(bRed ? FMath::Max(1, Config ? Config->RedSteps : 5)
+	                  : GetStepsPerNote(),
+	             bRed && !bNextRed);
 
-	const TPair<int32, int32> Pick = Cands[FMath::RandRange(0, Cands.Num() - 1)];
-	const FVector At = Terrain->GetStepLocation(Pick.Key, Pick.Value);
-
-	Terrain->RemoveStep(Pick.Key, Pick.Value);
-
-	// 爆発させる
-	FActorSpawnParameters SP;
-	SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	if (AStairSpark* S = World->SpawnActor<AStairSpark>(
-		AStairSpark::StaticClass(), At + FVector(0.f, 0.f, 40.f),
-		FRotator::ZeroRotator, SP))
-	{
-		S->Burst(FLinearColor(1.f, 0.42f, 0.06f, 1.f), 2.0f);
-	}
-
-	PlaySystemSound(Config->WarningSound);
+	// 見逃しても足場は傷む。立ち止まり続ければいずれ崩れる
+	DamageCurrentStep();
 }
 
 void AStairGameMode::NotifyWallBounce()
 {
-	// 判定（Miss）は NotifyJudge で通知済み。ここでは耐久だけ減らす
+	// ★壁に弾かれた場合、音符は「叩けた」ので既に消費されている。
+	//   進めていないぶんだけ地形を詰めないと、この先がずれる。
 	NotifyMissOnCurrentStep();
+	CollapseRows(GetStepsPerNote(), false);
 }
 
 void AStairGameMode::UpdateCombo(EStairJudge Judge)
@@ -1115,6 +1309,22 @@ void AStairGameMode::UpdateCombo(EStairJudge Judge)
 	{
 		Combo = 0;
 		LastComboBeat = -9999;
+		return;
+	}
+
+	// ★譜面があるときは「音符を1つも落とさずに続けた数」を数える。
+	//   音符は等間隔とは限らないので、拍で数えると
+	//   譜面どおりに叩けていてもコンボが切れてしまう。
+	if (HasChart())
+	{
+		++Combo;
+		MaxCombo = FMath::Max(MaxCombo, Combo);
+
+		const int32 SparkEvery = Config ? FMath::Max(1, Config->ComboSparkEvery) : 10;
+		if ((Combo % SparkEvery) == 0)
+		{
+			SpawnComboSparks();
+		}
 		return;
 	}
 
@@ -1200,6 +1410,33 @@ void AStairGameMode::NotifyMissOnCurrentStep()
 	++MissCount;
 	++JumpMissCount;   // 拍を外した・壁に弾かれた
 
+	// ★ここでは地形を詰めない。
+	//   拍と関係ない空押しでも呼ばれるので、詰めると譜面のほうがずれる。
+	//   詰めるのは「音符が1つ消えたのに進めなかった」ときだけ。
+	DamageCurrentStep();
+}
+
+void AStairGameMode::NotifyMissJump()
+{
+	// ★譜面があるときは何もしない。
+	//   同じ1回のミスを「押した瞬間」と「音符が流れ切った瞬間」の
+	//   二度数えてしまい、MISS が2回、足場のヒビも2つ入っていた。
+	//   数えるのは音符側（OnNoteMissed）だけにする。
+	if (HasChart())
+	{
+		return;
+	}
+	NotifyMissOnCurrentStep();
+}
+
+void AStairGameMode::DamageCurrentStep()
+{
+	AStairCharacter* P = GetPlayerChar();
+	if (State != EStairGameState::Playing || !P || !Terrain || !Config)
+	{
+		return;
+	}
+
 	AStairStep* Here = Terrain->GetStep(P->GetCurrentRow(), P->GetCurrentLane());
 	if (!Here)
 	{
@@ -1242,7 +1479,11 @@ void AStairGameMode::UpdateSkyByT(float T)
 
 	if (SunLight)
 	{
-		if (UDirectionalLightComponent* C = SunLight->GetComponent())
+		// ★ADirectionalLight::GetComponent() はエディタ専用で、
+		//   パッケージ（Shipping）には存在しない。
+		//   どの構成でも使える ALight::GetLightComponent() から取る。
+		if (UDirectionalLightComponent* C =
+			Cast<UDirectionalLightComponent>(SunLight->GetLightComponent()))
 		{
 			C->SetIntensity(FMath::Lerp(Config->SunIntensityStart,
 				Config->SunIntensityEnd, A));
@@ -1287,11 +1528,7 @@ void AStairGameMode::UpdateWidgets()
 		return;
 	}
 
-	// ★テンポ合わせの案内も HUD に出すので、Intro を含める。
-	//   ここに入れ忘れると、曲を選んだあと画面に何も出ず、
-	//   何をすればよいか分からないまま止まって見える。
-	const bool bWantHUD = (State == EStairGameState::Intro
-		|| State == EStairGameState::Countdown
+	const bool bWantHUD = (State == EStairGameState::Countdown
 		|| State == EStairGameState::Playing
 		|| State == EStairGameState::Finished);
 

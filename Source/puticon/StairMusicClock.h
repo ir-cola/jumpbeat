@@ -35,6 +35,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void StartSong(USoundBase* Sound, float InBPM, float InBeatOffset, float StartDelay);
 
+	/**
+	 * ★曲を一時停止する。
+	 *   ゲームを止めると Tick が来なくなり時計は勝手に止まるが、
+	 *   音だけは鳴り続けてしまうので明示的に止める。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void SetPaused(bool bPause);
+
 	/** 環境ごとの音の遅れ補正（秒）を設定する */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void SetGlobalOffset(float Seconds) { GlobalOffset = Seconds; }

@@ -119,6 +119,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void StartRise(float Depth = 220.f, float Seconds = 0.22f);
 
+	/**
+	 * ★いまの位置から、置かれた位置まで滑らせる。
+	 *
+	 *   足踏みで行を詰めるとき、段は1段ぶん手前へ動く。
+	 *   そのまま座標を書き換えると瞬間移動に見えるので、
+	 *   直前の見た目の位置から新しい位置へ短時間で滑らせる。
+	 *
+	 *   @param From 動かす前の見た目の位置
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void StartSlideFrom(const FVector& From, float Seconds = 0.12f);
+
 protected:
 	/** 浮き上がりの進行 */
 	bool bRising = false;
@@ -126,4 +138,11 @@ protected:
 	float RiseSeconds = 0.22f;
 	float RiseDepth = 220.f;
 	FVector RiseGoal = FVector::ZeroVector;
+
+	/** 行を詰めたときのスライドの進行 */
+	bool bSliding = false;
+	float SlideElapsed = 0.f;
+	float SlideSeconds = 0.12f;
+	FVector SlideFrom = FVector::ZeroVector;
+	FVector SlideGoal = FVector::ZeroVector;
 };

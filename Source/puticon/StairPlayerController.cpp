@@ -30,24 +30,16 @@ void AStairPlayerController::SetupInputComponent()
 
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))
 	{
-		// ★A / D は押しっぱなしを見る。押した瞬間と離した瞬間の両方を拾う
+		// ★A / D も押した瞬間に跳ぶ。SPACE と同じ扱い
 		if (LeftAction)
 		{
 			EIC->BindAction(LeftAction, ETriggerEvent::Started,
 				this, &AStairPlayerController::OnLeftPressed);
-			EIC->BindAction(LeftAction, ETriggerEvent::Completed,
-				this, &AStairPlayerController::OnLeftReleased);
-			EIC->BindAction(LeftAction, ETriggerEvent::Canceled,
-				this, &AStairPlayerController::OnLeftReleased);
 		}
 		if (RightAction)
 		{
 			EIC->BindAction(RightAction, ETriggerEvent::Started,
 				this, &AStairPlayerController::OnRightPressed);
-			EIC->BindAction(RightAction, ETriggerEvent::Completed,
-				this, &AStairPlayerController::OnRightReleased);
-			EIC->BindAction(RightAction, ETriggerEvent::Canceled,
-				this, &AStairPlayerController::OnRightReleased);
 		}
 		if (JumpAction)
 		{
@@ -56,14 +48,21 @@ void AStairPlayerController::SetupInputComponent()
 		}
 	}
 
-	// ★撃つ操作は入力アセットを作らず、キーを直接束ねる。
-	//   Enter と左クリックの2つを同じ処理へ繋ぐ。
+	// ★譜面を打ち込むときだけ左クリックを使う。
+	//   ゲーム操作としての射撃は廃止した。
 	if (InputComponent)
 	{
-		InputComponent->BindKey(EKeys::Enter, IE_Pressed,
-			this, &AStairPlayerController::OnFireKey);
 		InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed,
 			this, &AStairPlayerController::OnFireKey);
+
+		// ★Esc でポーズ。止まっている最中も効かないと解除できないので、
+		//   bExecuteWhenPaused を立てる。
+		FInputKeyBinding& B = InputComponent->BindKey(
+			EKeys::Escape, IE_Pressed, this, &AStairPlayerController::OnPauseKey);
+		B.bExecuteWhenPaused = true;
+
+		// このコンポーネント自体も停止中に動くようにする
+		bShouldPerformFullTickWhenPaused = true;
 	}
 }
 
@@ -79,73 +78,63 @@ bool AStairPlayerController::IsInputAllowed() const
 
 void AStairPlayerController::OnJump(const FInputActionValue& Value)
 {
-	AStairGameMode* GM = Cast<AStairGameMode>(UGameplayStatics::GetGameMode(this));
-
-	// ★テンポ合わせの最中は、跳ばずに「押した」ことだけを数える
-	if (GM && GM->GetState() == EStairGameState::Intro)
-	{
-		GM->NotifyIntroTap();
-		return;
-	}
-
-	// ★カウントダウン中も押せるようにする。
-	//   進みはしないが、拍を確かめ続けられる。
-	if (GM && GM->GetState() == EStairGameState::Countdown)
-	{
-		GM->NotifyPracticeTap();
-		return;
-	}
-
-	if (!IsInputAllowed()) { return; }
-	if (AStairCharacter* C = Cast<AStairCharacter>(GetPawn()))
-	{
-		C->TryJump();
-	}
+	DoJump(EStairDir::Forward);
 }
 
 void AStairPlayerController::OnFireKey()
 {
-	if (!IsInputAllowed()) { return; }
+	// 譜面編集中に音符を置く操作。それ以外では何もしない
 	if (AStairGameMode* GM = Cast<AStairGameMode>(UGameplayStatics::GetGameMode(this)))
 	{
-		GM->FireShot();
+		if (GM->IsCharting())
+		{
+			GM->ChartPlace();
+		}
+	}
+}
+
+void AStairPlayerController::OnPauseKey()
+{
+	if (AStairGameMode* GM = Cast<AStairGameMode>(UGameplayStatics::GetGameMode(this)))
+	{
+		GM->TogglePause();
 	}
 }
 
 void AStairPlayerController::OnLeftPressed(const FInputActionValue& Value)
 {
-	// 押しっぱなしの記録は Result 中でも消す必要があるので、
-	// 状態チェックは押下時のみ行う
-	if (!IsInputAllowed()) { return; }
-	if (AStairCharacter* C = Cast<AStairCharacter>(GetPawn()))
-	{
-		C->SetHeldLeft(true);
-	}
-}
-
-void AStairPlayerController::OnLeftReleased(const FInputActionValue& Value)
-{
-	// 離す側は常に受け付ける。押しっぱなしが残ると誤動作するため
-	if (AStairCharacter* C = Cast<AStairCharacter>(GetPawn()))
-	{
-		C->SetHeldLeft(false);
-	}
+	// ★押した瞬間に左へ跳ぶ。方向を溜めておく仕組みは廃止した
+	DoJump(EStairDir::Left);
 }
 
 void AStairPlayerController::OnRightPressed(const FInputActionValue& Value)
 {
+	DoJump(EStairDir::Right);
+}
+
+void AStairPlayerController::DoJump(EStairDir InDir)
+{
+	AStairGameMode* GM = Cast<AStairGameMode>(UGameplayStatics::GetGameMode(this));
+
+	// ★カウントダウン中でも押せる。
+	//   START の瞬間に押せば、それが最初の1歩になる。
+	//   まだ START に届いていなければ空押しとして拍だけ確かめられる。
+	//
+	//   ★曲が鳴り出すのを Tick で待っていたため、START と同時に押した
+	//     1歩めが空押しとして捨てられていた。判定に間に合っていれば
+	//     ここで遊びを始めて、そのまま跳ばせる。
+	if (GM && GM->GetState() == EStairGameState::Countdown)
+	{
+		if (!GM->TryStartFromCountdown())
+		{
+			GM->NotifyPracticeTap();
+			return;
+		}
+	}
+
 	if (!IsInputAllowed()) { return; }
 	if (AStairCharacter* C = Cast<AStairCharacter>(GetPawn()))
 	{
-		C->SetHeldRight(true);
+		C->TryJump(InDir);
 	}
 }
-
-void AStairPlayerController::OnRightReleased(const FInputActionValue& Value)
-{
-	if (AStairCharacter* C = Cast<AStairCharacter>(GetPawn()))
-	{
-		C->SetHeldRight(false);
-	}
-}
-

@@ -21,6 +21,16 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Stair")
 	TObjectPtr<UUserWidget> MenuWidget;
+
+	/**
+	 * ★幕（UMG）が出るまでカメラ側でも隠しておく残り時間。
+	 *   UMG はレベルの1枚目に間に合わないことがあるので、
+	 *   そのあいだだけカメラのフェードで覆う。
+	 */
+	float ScreenFadeHold = 0.f;
+
+	/** 残り時間を進め、0 になったらカメラの暗転を解く */
+	void TickScreenFade(float DeltaSeconds);
 };
 
 /**
@@ -38,6 +48,12 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
+	/**
+	 * ★BGMを一時停止する。譜面エディタから呼ぶ。
+	 *   打ち込み中は曲を聴きながら置くので、タイトルの曲と混ざると使えない。
+	 */
+	void SetBGMPaused(bool bPause);
 
 protected:
 	/** BGMが鳴り終わったら頭から鳴らし直す */

@@ -89,6 +89,23 @@ void AStairStep::ApplyTileColor()
 	DynMat->SetVectorParameterValue(TEXT("BaseColor"), C);
 }
 
+void AStairStep::StartSlideFrom(const FVector& From, float Seconds)
+{
+	// 呼ばれた時点で、アクターは既に新しい位置に置かれている
+	SlideGoal = GetActorLocation();
+	SlideFrom = From;
+	SlideSeconds = FMath::Max(0.02f, Seconds);
+	SlideElapsed = 0.f;
+	bSliding = true;
+
+	// ★浮き上がりの途中なら打ち切る。位置の取り合いになるため
+	bRising = false;
+
+	// 見た目は元の位置から始める
+	SetActorLocation(SlideFrom);
+	SetActorTickEnabled(true);
+}
+
 void AStairStep::StartRise(float Depth, float Seconds)
 {
 	RiseGoal = GetActorLocation();
@@ -107,6 +124,25 @@ void AStairStep::StartRise(float Depth, float Seconds)
 void AStairStep::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// ---- 行を詰めたときのスライド ----
+	// ★浮き上がりより優先する。位置の決定権はこちらにある
+	if (bSliding)
+	{
+		SlideElapsed += DeltaSeconds;
+		const float T = FMath::Clamp(SlideElapsed / SlideSeconds, 0.f, 1.f);
+
+		// 素早く出て、最後にすっと止まる
+		const float E = 1.f - FMath::Pow(1.f - T, 3.f);
+		SetActorLocation(FMath::Lerp(SlideFrom, SlideGoal, E));
+
+		if (T >= 1.f)
+		{
+			bSliding = false;
+			SetActorLocation(SlideGoal);
+		}
+		return;
+	}
 
 	if (!bRising)
 	{

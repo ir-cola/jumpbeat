@@ -11,7 +11,11 @@ DerivedDataCache/
 Build/
 
 # ローカルの設定・ログ・一時ファイル
-Saved/
+# ★ただし Saved/Charts だけは追跡する。
+#   譜面エディタで打った実データがここにあり、失うと作り直しになる。
+#   （ディレクトリごと除外すると中を見に行かないので、Saved/* と書く）
+Saved/*
+!Saved/Charts/
 
 # Visual Studio / Rider
 .vs/

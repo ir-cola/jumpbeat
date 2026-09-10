@@ -46,14 +46,33 @@ public:
 	int32 RedSteps = 5;
 
 	/**
-	 * ★滞空時間（秒）。1段でも2段でも5段でも必ずこの時間で着地する。
+	 * ★滞空時間の上限（秒）。1段でも2段でも5段でも必ずこの時間で着地する。
 	 *   段数で時間が変わるとリズムが取れなくなるため、ここを固定にして
 	 *   重力と初速の方を段数に合わせて計算する。
-	 *   次のジャンプが打てるまでの間隔もこの値で決まる。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ",
 		meta = (ClampMin = "0.15", ClampMax = "1.5"))
 	float JumpFlightTime = 0.42f;
+
+	/**
+	 * ★音符が詰まっているところでは滞空時間を自動で縮める。
+	 *
+	 *   着地するまで次のジャンプは受け付けないので、
+	 *   滞空時間より短い間隔で音符が並ぶと、その音符は物理的に押せない。
+	 *   たとえば BPM200 の8分刻みは 300ms しかなく、
+	 *   0.42秒のままでは譜面の大半が入力を受け付けなくなる。
+	 *
+	 *   そこで「次の音符までの残り時間 × この割合」を滞空時間にする。
+	 *   1.0 にすると着地と同時に次が来るので、少し余裕を残す。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ",
+		meta = (ClampMin = "0.5", ClampMax = "1.0"))
+	float JumpFlightGapRatio = 0.88f;
+
+	/** 縮めてもこれより短くはしない（秒）。速すぎて見えなくなるため */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ",
+		meta = (ClampMin = "0.05", ClampMax = "0.4"))
+	float MinJumpFlightTime = 0.12f;
 
 	/**
 	 * 弧の頂点を、着地点から何ユニット上に取るか。
@@ -65,6 +84,20 @@ public:
 	/** MISS（その場ジャンプ）の頂点の高さ */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ")
 	float MissJumpApex = 120.f;
+
+	/**
+	 * ★赤マスから跳ぶときは、一拍ぶん浮いたままにする。
+	 *   すぐ着地せずゆっくり滞空させることで、
+	 *   5段先まで一気に跳ぶ大技だと分かるようにする。
+	 *   浮いているあいだは操作できない（着地するまで次を受け付けないため）。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ",
+		meta = (ClampMin = "0.25", ClampMax = "4.0"))
+	float RedFlightBeats = 1.0f;
+
+	/** 赤マスから跳ぶときの弧の高さ。普段よりずっと高く跳ばせる */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "03_ジャンプ")
+	float RedJumpApex = 420.f;
 
 	/**
 	 * ★ジャンプの速さ。大きいほどキビキビ跳ぶ。
@@ -250,87 +283,16 @@ public:
 		meta = (ClampMin = "1", ClampMax = "4"))
 	int32 MaxBlockedRun = 1;
 
-	/** 壁の高さ。通常の足場の何倍にするか */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "04_地形",
-		meta = (ClampMin = "1.0", ClampMax = "12.0"))
-	float WallHeightScale = 4.5f;
-
-	// ================= 射撃 =================
-
-	/** 1マガジンのチャージ数 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "09_射撃")
-	int32 MagazineSize = 3;
-
-	/** チャージを使い切ったときのリロード時間（秒） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "09_射撃")
-	float ReloadSeconds = 2.0f;
-
-	/** 弾の速さ（cm/秒） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "09_射撃")
-	float BulletSpeed = 4200.f;
-
-	/** 弾が届く段数。1 なら1段先まで */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "09_射撃")
-	int32 BulletRangeRows = 1;
-
-	/** 弾の大きさ */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "09_射撃")
-	float BulletScale = 0.22f;
-
-	// ================= 障害物（隕石） =================
-
-	/** 落下の開始から着弾までの時間（秒）。＝撃つ猶予 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	float MeteorLeadSeconds = 2.2f;
-
-	/** 落ちてくる高さ */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	float MeteorSpawnHeight = 2600.f;
-
-	/** 斜めに落とすための横方向のずらし */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	FVector MeteorSpawnOffset = FVector(-1500.f, 900.f, 0.f);
-
-	/** 隕石の大きさ */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	float MeteorScale = 0.85f;
-
-	/** 回転の速さ（度/秒） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	FRotator MeteorSpin = FRotator(220.f, 160.f, 190.f);
-
-	/** 撃ち落とせなかったとき、何段先の足場を壊すか */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	int32 MeteorBreakRowMin = 2;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	int32 MeteorBreakRowMax = 5;
-
-	/** 壊す位置の横のばらつき（プレイヤーのレーン±この値） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物")
-	int32 MeteorBreakLaneSpread = 1;
-
 	/**
-	 * ★撃つ判定の幅。縮む円の半径に対する割合で持つ。
-	 *   0 で黄緑リングにぴったり重なった状態。
+	 * 壁の高さ。
+	 * 1 で「1段上の足場と同じ高さ」（上の段から見て床が続いて見える）。
+	 * 大きくするとそこからさらに上へ伸びる。
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ShotPerfectWidth = 0.10f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float ShotGreatWidth = 0.26f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "04_地形",
+		meta = (ClampMin = "1.0", ClampMax = "30.0"))
+	float WallHeightScale = 3.33f;
 
 	// ================= UI =================
-
-	/** この段数までのぼると、拍ゲージが左へ去って二度と出ない */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI")
-	int32 GaugeExitRow = 50;
-
-	/** ゲージが去るのにかける時間（秒） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI")
-	float GaugeExitSeconds = 0.9f;
 
 	/** ゲージに残す残像の数 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI")
@@ -342,13 +304,99 @@ public:
 
 	/** 画面の開閉（丸）にかける時間（秒） */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI")
-	float IrisSeconds = 0.2f;
+	float IrisSeconds = 0.405f;
 
-	// ================= イントロ =================
+	/**
+	 * ★真っ黒のまま止めておく時間（秒）。
+	 *
+	 *   閉じきったフレームでそのままレベルを切り替えると、
+	 *   最後の1枚が描かれる前に画面が入れ替わり、
+	 *   暗くなりきる前に次の画面が見えてしまう。
+	 *   開くときも、読み込みで詰まった1フレームで一気に開ききらないよう、
+	 *   まず黒いまま待ってから開き始める。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float IrisHoldSeconds = 0.1f;
 
-	/** 曲が始まる前に、テンポどおり押させる回数 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "12_イントロ")
-	int32 IntroTapCount = 3;
+	/**
+	 * ★起動してタイトルが出るまでの、白からのフェードイン（秒）。
+	 *   立ち上がりの一瞬だけエンジンの初期画面が見えてしまうので、
+	 *   白で覆っておいて、そこからタイトルを浮かび上がらせる。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI",
+		meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float BootFadeSeconds = 1.2f;
+
+	// ================= 開始 =================
+
+	/**
+	 * ★画面のサークルワイプが開ききってから、
+	 *   カウントダウンが始まるまでの待ち（秒）。
+	 *   開くのと同時に数字が出ると慌ただしいので少し置く。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "12_開始")
+	float CountdownLeadSeconds = 1.0f;
+
+	/**
+	 * ★スタート地点から何段ぶんは、穴も壁も出さないか。
+	 *   開始直後にいきなり避けさせられるのを防ぐ。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "12_開始")
+	int32 SafeStartRows = 3;
+
+	// ================= 譜面 =================
+
+	/**
+	 * ★譜面の音符1つで進む段数。
+	 *   譜面があるときは判定（PERFECT/GREAT）で距離を変えない。
+	 *   変えると着地点が二通りになり、通る道が定まらなくなるため。
+	 *   判定はスコアとコンボにだけ効く。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
+		meta = (ClampMin = "1", ClampMax = "4"))
+	int32 ChartStepsPerNote = 1;
+
+	/**
+	 * ★エンドレスで音符1つあたりに進む段数。
+	 *   エンドレスはのぼった段数がそのままスコアになるので、
+	 *   通常プレイより1回あたりの伸びを大きくしておく。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
+		meta = (ClampMin = "1", ClampMax = "4"))
+	int32 EndlessStepsPerNote = 2;
+
+	/**
+	 * ★譜面が使う幅の外側に、何レーンぶん余裕を持たせるか。
+	 *   譜面どおりに進むぶんには要らないが、
+	 *   端が切り立って見えないよう少しだけ広げる。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
+		meta = (ClampMin = "0", ClampMax = "8"))
+	int32 ChartLaneMargin = 2;
+
+	/**
+	 * ★足踏みで行を詰めるとき、段が滑るのにかける時間（秒）。
+	 *   0 にすると瞬間移動になる。短くしすぎると詰めたことに気づけない。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
+		meta = (ClampMin = "0.0", ClampMax = "0.5"))
+	float RowShiftSlideSeconds = 0.12f;
+
+	/** エンドレスで次の曲に移るまでの間（秒） */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
+		meta = (ClampMin = "0.2", ClampMax = "5.0"))
+	float EndlessGapSeconds = 1.6f;
+
+	/**
+	 * ★譜面を打ち込むときの細かさ。
+	 *   1拍を何分割して置けるようにするか。
+	 *   4 にすると裏拍や16分の位置にも置ける。
+	 *   JumpBeats の値はこの単位で持つ（4 なら 1 = 1/4拍）。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "10_障害物",
+		meta = (ClampMin = "1", ClampMax = "8"))
+	int32 ChartSubdivision = 4;
 
 	/** イントロで MISS したら数え直すか */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "12_イントロ")

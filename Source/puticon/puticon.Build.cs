@@ -8,15 +8,14 @@ public class puticon : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// ★テンプレートのバリアント（Combat / Platforming / SideScrolling）は
+		//   まるごと削除したので、AI や StateTree への依存も外してある。
 		PublicDependencyModuleNames.AddRange(new string[] {
 			"Core",
 			"CoreUObject",
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
-			"AIModule",
-			"StateTreeModule",
-			"GameplayStateTreeModule",
 			"UMG",
 			"Slate",
 			"SlateCore"
@@ -25,20 +24,7 @@ public class puticon : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
 		PublicIncludePaths.AddRange(new string[] {
-			"puticon",
-			"puticon/Variant_Platforming",
-			"puticon/Variant_Platforming/Animation",
-			"puticon/Variant_Combat",
-			"puticon/Variant_Combat/AI",
-			"puticon/Variant_Combat/Animation",
-			"puticon/Variant_Combat/Gameplay",
-			"puticon/Variant_Combat/Interfaces",
-			"puticon/Variant_Combat/UI",
-			"puticon/Variant_SideScrolling",
-			"puticon/Variant_SideScrolling/AI",
-			"puticon/Variant_SideScrolling/Gameplay",
-			"puticon/Variant_SideScrolling/Interfaces",
-			"puticon/Variant_SideScrolling/UI"
+			"puticon"
 		});
 
 		// Uncomment if you are using Slate UI

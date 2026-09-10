@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "StairTypes.h"
 #include "StairPlayerController.generated.h"
 
 class UInputMappingContext;
@@ -26,17 +27,19 @@ public:
 
 protected:
 	void OnLeftPressed(const FInputActionValue& Value);
-	void OnLeftReleased(const FInputActionValue& Value);
 	void OnRightPressed(const FInputActionValue& Value);
-	void OnRightReleased(const FInputActionValue& Value);
 	void OnJump(const FInputActionValue& Value);
 
-	/**
-	 * ★撃つ。Enter と左クリックの両方から呼ばれる。
-	 *   入力アセットを増やさずに済むよう、キーを直接束ねている。
-	 */
+	/** 3つのキーから共通で呼ぶ。状態に応じて跳ぶ／数える */
+	void DoJump(EStairDir InDir);
+
+	/** 譜面編集中に音符を置く（左クリック） */
 	UFUNCTION()
 	void OnFireKey();
+
+	/** Esc。ポーズの出入り */
+	UFUNCTION()
+	void OnPauseKey();
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Stair|Input")
 	TObjectPtr<UInputMappingContext> StairMappingContext;

@@ -55,6 +55,14 @@ void UStairMusicClock::StartSong(USoundBase* Sound, float InBPM, float InBeatOff
 	}
 }
 
+void UStairMusicClock::SetPaused(bool bPause)
+{
+	if (AudioComp)
+	{
+		AudioComp->SetPaused(bPause);
+	}
+}
+
 void UStairMusicClock::StopSong()
 {
 	if (AudioComp)

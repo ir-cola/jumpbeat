@@ -32,6 +32,22 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Stair")
 	int32 LastScore = 0;
 
+	/**
+	 * ★エンドレスモードか。
+	 *   曲を順番に流し続け、死ぬまで終わらない。
+	 *   譜面は曲ごとのものを使うが、地形は完全ランダムにする。
+	 */
+	UPROPERTY(BlueprintReadWrite, Category = "Stair")
+	bool bEndlessMode = false;
+
+	/**
+	 * ★起動直後の1回だけ true→false になる。
+	 *   最初にタイトルを出すときは白からのフェードイン、
+	 *   ゲームから戻ってきたときはサークルワイプ、と出し分けるために使う。
+	 */
+	UPROPERTY(BlueprintReadWrite, Category = "Stair")
+	bool bBootDone = false;
+
 	/** 曲リストなどの設定。BGM選択画面が参照する */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Stair")
 	TObjectPtr<UStairConfig> Config;
