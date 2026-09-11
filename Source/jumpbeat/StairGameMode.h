@@ -113,8 +113,14 @@ public:
 	 *   跳んでいる最中に押された入力は着地まで持ち越すので、
 	 *   「押した瞬間の時刻」で判定しないと不当に遅れた扱いになる。
 	 */
+	/**
+	 * @param NoteIndex 判定の相手にする音符。-1 なら「いま待っている音符」。
+	 *   ★跳んでいる最中の入力を持ち越すときは、押した時点の音符を
+	 *     覚えておいて渡す。着地時に選び直すと、そのあいだに
+	 *     音符が流れ落ちていた場合、次の音符を横取りしてしまう。
+	 */
 	UFUNCTION(BlueprintPure, Category = "Stair")
-	EStairJudge JudgeAt(float AtSongTime) const;
+	EStairJudge JudgeAt(float AtSongTime, int32 NoteIndex = -1) const;
 
 	/**
 	 * ★いまの瞬間のズレ（秒）。符号つき。
@@ -124,7 +130,7 @@ public:
 	float GetSignedJudgeOffset() const;
 
 	UFUNCTION(BlueprintPure, Category = "Stair")
-	float GetSignedJudgeOffsetAt(float AtSongTime) const;
+	float GetSignedJudgeOffsetAt(float AtSongTime, int32 NoteIndex = -1) const;
 
 	/** いまの再生位置（秒）。入力を押した時刻を覚えておくのに使う */
 	UFUNCTION(BlueprintPure, Category = "Stair")
@@ -136,7 +142,7 @@ public:
 	 *   譜面どおりに叩くゲームなので、向きが違えば叩けていない。
 	 */
 	UFUNCTION(BlueprintPure, Category = "Stair")
-	bool DoesDirectionMatch(EStairDir Dir) const;
+	bool DoesDirectionMatch(EStairDir Dir, int32 NoteIndex = -1) const;
 
 	/** 直前に跳んだときのズレ（秒）。FAST / SLOW の表示に使う */
 	UFUNCTION(BlueprintPure, Category = "Stair")
@@ -180,7 +186,7 @@ public:
 
 	/** 判定が出たときに集計する。SignedOffset は押した瞬間のズレ（秒） */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
-	void NotifyJudge(EStairJudge Judge, float SignedOffset);
+	void NotifyJudge(EStairJudge Judge, float SignedOffset, int32 NoteIndex = -1);
 
 	/** その場ジャンプ＝いま乗っている足場にMISSを記録する */
 	UFUNCTION(BlueprintCallable, Category = "Stair")

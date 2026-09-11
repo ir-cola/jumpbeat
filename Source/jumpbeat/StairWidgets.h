@@ -7,10 +7,9 @@
 
 /**
  * ★譜面エディタへの入口を出すか。
- *   譜面は打ち終わって Saved/Charts に残っているので、完成版では 0。
- *   譜面を作り直したくなったら 1 に戻す。エディタ本体は残してある。
+ *   開発用の操作はまとめて STAIR_DEV_TOOLS で切り替える。
  */
-#define STAIR_SHOW_CHART_EDITOR 0
+#define STAIR_SHOW_CHART_EDITOR STAIR_DEV_TOOLS
 
 class UTextBlock;
 class UButton;
@@ -289,6 +288,9 @@ protected:
 
 	/** 左上：緑のデジタル風タイマー */
 	UPROPERTY() TObjectPtr<UTextBlock> TimerText;
+
+	/** タイマーの下敷き。エンドレスでは文字ごと消す */
+	UPROPERTY() TObjectPtr<UBorder> TimerBG;
 
 	/** 右上：階段アイコン＋段数 */
 	UPROPERTY() TObjectPtr<UTextBlock> StairIcon;

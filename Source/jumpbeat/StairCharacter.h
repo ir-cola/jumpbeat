@@ -45,7 +45,7 @@ public:
 	 * ★跳んでいる最中の入力は着地まで持ち越すので、
 	 *   「いま」ではなく「押したとき」で判定しないと不当に遅れた扱いになる。
 	 */
-	void ExecuteJump(EStairDir InDir, float PressSongTime);
+	void ExecuteJump(EStairDir InDir, float PressSongTime, int32 NoteIndex = -1);
 
 	/**
 	 * ★この跳躍の滞空時間を決める。
@@ -233,6 +233,13 @@ protected:
 	bool bHasBuffered = false;
 	EStairDir BufferedDir = EStairDir::Forward;
 	float BufferedSongTime = 0.f;
+
+	/**
+	 * ★押した時点で狙っていた音符。
+	 *   着地時に選び直すと、そのあいだに音符が流れ落ちていた場合、
+	 *   次の音符を横取りして不当な成功になってしまう。
+	 */
+	int32 BufferedNoteIndex = -1;
 
 	/** 覚えておく時間の上限（秒）。古すぎる入力は捨てる */
 	UPROPERTY(EditDefaultsOnly, Category = "Stair|Input")

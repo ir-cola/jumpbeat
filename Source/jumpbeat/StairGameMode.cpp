@@ -1,4 +1,4 @@
-#include "StairGameMode.h"
+﻿#include "StairGameMode.h"
 #include "StairStep.h"
 #include "StairCharacter.h"
 #include "StairPlayerController.h"
@@ -407,19 +407,22 @@ float AStairGameMode::GetSongTimeNow() const
 	return MusicClock ? MusicClock->GetSongTime() : 0.f;
 }
 
-float AStairGameMode::GetSignedJudgeOffsetAt(float AtSongTime) const
+float AStairGameMode::GetSignedJudgeOffsetAt(float AtSongTime, int32 NoteIndex) const
 {
 	if (!MusicClock)
 	{
 		return 0.f;
 	}
 
-	// ★譜面があるときは「次の音符」との差。
+	// -1 なら「いま待っている音符」
+	const int32 Idx = (NoteIndex >= 0) ? NoteIndex : NextNoteIndex;
+
+	// ★指定された音符との差。
 	//   マイナス＝音符より早い（FAST）、プラス＝遅い（SLOW）。
 	if (HasChart() && State == EStairGameState::Playing
-		&& CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+		&& CurrentSong.Notes.IsValidIndex(Idx))
 	{
-		return AtSongTime - NoteTime(NextNoteIndex);
+		return AtSongTime - NoteTime(Idx);
 	}
 	return MusicClock->GetOffsetFromNearestBeat();
 }
@@ -429,16 +432,24 @@ float AStairGameMode::GetSignedJudgeOffset() const
 	return GetSignedJudgeOffsetAt(GetSongTimeNow());
 }
 
-EStairJudge AStairGameMode::JudgeAt(float AtSongTime) const
+EStairJudge AStairGameMode::JudgeAt(float AtSongTime, int32 NoteIndex) const
 {
 	if (!MusicClock || !Config)
 	{
 		return EStairJudge::Miss;
 	}
 
+	// ★指定された音符が既に流れ落ちていたら、その入力は無効。
+	//   次の音符を横取りさせない。
+	if (NoteIndex >= 0 && NoteIndex < NextNoteIndex)
+	{
+		return EStairJudge::Miss;
+	}
+
 	// 一定間隔の拍ではなく、置かれた音符どおりに跳ぶゲームにするため。
 	// 譜面が無い曲は従来どおり全拍で跳べる。
-	const float OffsetMs = FMath::Abs(GetSignedJudgeOffsetAt(AtSongTime)) * 1000.f;
+	const float OffsetMs =
+		FMath::Abs(GetSignedJudgeOffsetAt(AtSongTime, NoteIndex)) * 1000.f;
 
 	if (OffsetMs <= Config->PerfectWindowMs)
 	{
@@ -456,7 +467,7 @@ EStairJudge AStairGameMode::JudgeNow() const
 	return JudgeAt(GetSongTimeNow());
 }
 
-bool AStairGameMode::DoesDirectionMatch(EStairDir Dir) const
+bool AStairGameMode::DoesDirectionMatch(EStairDir Dir, int32 NoteIndex) const
 {
 	// ★エンドレスは地形が完全ランダムなので、方向は問わない。
 	//   譜面どおりの向きに跳ぶと穴や壁に突っ込むだけで、
@@ -467,13 +478,15 @@ bool AStairGameMode::DoesDirectionMatch(EStairDir Dir) const
 		return true;
 	}
 
+	const int32 Idx = (NoteIndex >= 0) ? NoteIndex : NextNoteIndex;
+
 	// 譜面が無ければ好きな方向へ跳べる
-	if (!HasChart() || !CurrentSong.Notes.IsValidIndex(NextNoteIndex))
+	if (!HasChart() || !CurrentSong.Notes.IsValidIndex(Idx))
 	{
 		return true;
 	}
 
-	switch (CurrentSong.Notes[NextNoteIndex].Type)
+	switch (CurrentSong.Notes[Idx].Type)
 	{
 	case EStairNote::Left:  return Dir == EStairDir::Left;
 	case EStairNote::Right: return Dir == EStairDir::Right;
@@ -543,12 +556,13 @@ void AStairGameMode::Tick(float DeltaSeconds)
 	// Pawn がまだ取れていなければ取れるまで試す
 	TryInitPlayer();
 
-	// タイミング補正を耳で合わせるための操作を受け付ける
+#if STAIR_DEV_TOOLS
+	// ★開発用の隠し操作。製品版では丸ごと無効。
+	//   遊んでいる人が O を誤って押すと地形が全部床に変わってしまう。
 	UpdateTimingTuner();
-
-	// 譜面編集の操作
 	UpdateCharting();
 	TunerShowTime = FMath::Max(0.f, TunerShowTime - DeltaSeconds);
+#endif
 
 	// t は1箇所でだけ求め、全システムに配る
 	const float T = GetT();
@@ -673,7 +687,7 @@ void AStairGameMode::NotifyLandedOn(AStairStep* Step)
 	Score = FMath::Max(Score, Step->Row + RowShiftTotal);
 }
 
-void AStairGameMode::NotifyJudge(EStairJudge Judge, float SignedOffset)
+void AStairGameMode::NotifyJudge(EStairJudge Judge, float SignedOffset, int32 NoteIndex)
 {
 	if (State != EStairGameState::Playing)
 	{
@@ -695,7 +709,9 @@ void AStairGameMode::NotifyJudge(EStairJudge Judge, float SignedOffset)
 	if (HasChart() && Judge != EStairJudge::Miss && Config
 		&& FMath::Abs(SignedOffset) <= Config->GreatWindowMs * 0.001f)
 	{
-		++NextNoteIndex;
+		// 叩いた音符の次へ進める。持ち越した入力でも取りこぼさない
+		const int32 Idx = (NoteIndex >= 0) ? NoteIndex : NextNoteIndex;
+		NextNoteIndex = FMath::Max(NextNoteIndex, Idx + 1);
 	}
 
 	UpdateCombo(Judge);
@@ -1319,6 +1335,11 @@ void AStairGameMode::OnNoteMissed(int32 Index)
 
 void AStairGameMode::NotifyWallBounce()
 {
+	// ★判定は壁に当たる前に通知済みなので、コンボはここで切る。
+	//   叩けてはいるが1段も進んでいないので、繋がったことにはしない。
+	Combo = 0;
+	LastComboBeat = -9999;
+
 	// ★壁に弾かれた場合、音符は「叩けた」ので既に消費されている。
 	//   進めていないぶんだけ地形を詰めないと、この先がずれる。
 	NotifyMissOnCurrentStep();
@@ -1388,26 +1409,36 @@ void AStairGameMode::SpawnComboSparks()
 	const int32 PRow = P->GetCurrentRow();
 	const int32 PLane = P->GetCurrentLane();
 
-	// ★プレイヤーが立っている足場の左右に固定して打ち上げる。
-	//   遠くのランダムな位置だと、自分の手柄という感じが出ないため。
-	const int32 Lanes[2] = { PLane - 1, PLane + 1 };
+	// ★4か所から打ち上げる。
+	//   すぐ左右の2つと、2つ横・3つ奥の2つ。
+	//   手前だけだと視界が埋まり、奥だけだと自分の手柄に見えない。
+	struct FSpot { int32 Row; int32 Lane; };
+	const FSpot Spots[4] =
+	{
+		{ PRow,     PLane - 1 },
+		{ PRow,     PLane + 1 },
+		{ PRow + 3, PLane - 2 },
+		{ PRow + 3, PLane + 2 }
+	};
+
+	// ★足場から直接ではなく、少し浮かせて空中で弾けさせる
+	const float Height = Config->SparkHeight;
 
 	FActorSpawnParameters SP;
 	SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	for (int32 i = 0; i < 2; ++i)
-	{
-		const int32 L = Lanes[i];
+	// コンボが伸びるほど派手にする
+	const float T = FMath::Clamp(Combo / 60.f, 0.f, 1.f);
 
-		// 足場が無ければ、その位置の空中から上げる
-		const FVector Loc = Terrain->GetStepLocation(PRow, L)
-			+ FVector(0.f, 0.f, 55.f);
+	for (const FSpot& Spot : Spots)
+	{
+		// 足場が無くても、その位置の空中から上げる
+		const FVector Loc = Terrain->GetStepLocation(Spot.Row, Spot.Lane)
+			+ FVector(0.f, 0.f, Height);
 
 		if (AStairSpark* S = World->SpawnActor<AStairSpark>(
 			AStairSpark::StaticClass(), Loc, FRotator::ZeroRotator, SP))
 		{
-			// ★コンボが伸びるほど派手にする。色は粒ごとに virandom で散らす
-			const float T = FMath::Clamp(Combo / 60.f, 0.f, 1.f);
 			S->BurstRainbow(1.4f + T * 1.1f);
 		}
 	}

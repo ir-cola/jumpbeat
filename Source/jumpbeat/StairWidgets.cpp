@@ -765,6 +765,19 @@ void UStairTitleWidget::NativeConstruct()
 		}
 	}
 
+	// ★白で待つのは起動の1回だけ。
+	//   ゲームから戻ってきたときは待ちが無いので、ここで鳴らし始める。
+	//   これを忘れると、リザルトの「曲をえらぶ」で戻ったときに
+	//   BGM が鳴らないまま無音になる。
+	if (!bBootWaiting)
+	{
+		if (AStairTitleGameMode* TGM =
+			Cast<AStairTitleGameMode>(UGameplayStatics::GetGameMode(this)))
+		{
+			TGM->StartBGM();
+		}
+	}
+
 	ShowPanel(bJumpToSongs ? EStairTitlePanel::SongSelect
 	                       : EStairTitlePanel::Menu);
 
@@ -1027,7 +1040,7 @@ void UStairHUDWidget::BuildUI(UCanvasPanel* Canvas)
 	RootCanvas = Canvas;
 
 	// ---- 左上：緑のデジタル風タイマー ----
-	UBorder* TimerBG = MakeBox(TEXT("TimerBG"), FLinearColor(0.f, 0.f, 0.f, 0.55f));
+	TimerBG = MakeBox(TEXT("TimerBG"), FLinearColor(0.f, 0.f, 0.f, 0.55f));
 	Place(Canvas, TimerBG, FVector2D(0.f, 0.f), FVector2D(0.f, 0.f),
 		FVector2D(40.f, 32.f), FVector2D(260.f, 78.f));
 
@@ -1182,7 +1195,18 @@ void UStairHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	}
 
 	// ---- 左上タイマー ----
-	if (TimerText)
+	// ★エンドレスでは出さない。
+	//   曲の残り時間なので曲が変わるたびに戻ってしまい、
+	//   落ちるまで終わらないモードでは意味を持たない。
+	{
+		const ESlateVisibility Vis = GM->IsEndless()
+			? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
+
+		if (TimerBG)   { TimerBG->SetVisibility(Vis); }
+		if (TimerText) { TimerText->SetVisibility(Vis); }
+	}
+
+	if (TimerText && !GM->IsEndless())
 	{
 		const float R = GM->GetRemainingTime();
 		const int32 M = FMath::FloorToInt(R / 60.f);

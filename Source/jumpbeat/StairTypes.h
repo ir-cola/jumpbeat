@@ -3,6 +3,22 @@
 #include "CoreMinimal.h"
 #include "StairTypes.generated.h"
 
+/**
+ * ★開発用の隠し操作をまとめて切るスイッチ。製品版は 0。
+ *
+ *   1 にすると次が使えるようになる。
+ *     O          譜面編集モードの出入り（地形が全部床になる）
+ *     SPACE/A/D/W 編集中に音符を置く
+ *     BackSpace  直前の音符を取り消す
+ *     P          譜面を Saved/Charts へ書き出す
+ *     [ ] \      判定タイミングの補正
+ *     曲選択の「譜面をつくる」ボタン
+ *
+ *   遊んでいる人が誤って押すと作品が壊れて見えるので、
+ *   出荷するときは必ず 0 に戻すこと。
+ */
+#define STAIR_DEV_TOOLS 0
+
 /** ゲームの進行状態。★Result中は入力を完全に遮断する */
 UENUM(BlueprintType)
 enum class EStairGameState : uint8

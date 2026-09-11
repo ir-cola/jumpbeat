@@ -10,8 +10,15 @@ AStairSpark::AStairSpark()
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
+	// ★粒は球。立方体だと角が見えて花火に見えない
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereAsset(
+		TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeAsset(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));
+
+	UStaticMesh* Shape = SphereAsset.Succeeded()
+		? SphereAsset.Object
+		: (CubeAsset.Succeeded() ? CubeAsset.Object : nullptr);
 
 	// ★光る粒には専用のマテリアルを使う。
 	//   BasicShapeMaterial はライトの影響を受けるので、
@@ -34,8 +41,8 @@ AStairSpark::AStairSpark()
 		M->SetupAttachment(Root);
 		M->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		M->SetCastShadow(false);
-		if (CubeAsset.Succeeded()) { M->SetStaticMesh(CubeAsset.Object); }
-		if (SparkMat)              { M->SetMaterial(0, SparkMat); }
+		if (Shape)    { M->SetStaticMesh(Shape); }
+		if (SparkMat) { M->SetMaterial(0, SparkMat); }
 		M->SetVisibility(false);
 		Meshes.Add(M);
 	}
@@ -44,7 +51,10 @@ AStairSpark::AStairSpark()
 void AStairSpark::BeginPlay()
 {
 	Super::BeginPlay();
-	SetLifeSpan(Life + 0.5f);
+
+	// ★寿命はここでは決めない。
+	//   Life は Burst のときに決まるので、BeginPlay の時点では既定値のまま。
+	//   ここで SetLifeSpan すると、演出が終わる前に消えてしまう。
 }
 
 void AStairSpark::BurstRainbow(float Power)
@@ -62,6 +72,10 @@ void AStairSpark::Burst(const FLinearColor& Color, float Power)
 	SparkColor = Color;
 	Age = 0.f;
 	bBurst = true;
+
+	// ★Life が確定したこの時点で寿命を決める。
+	//   Tick 側でも消すが、取りこぼしたときの保険として少し長めに取る。
+	SetLifeSpan(Life + 0.5f);
 
 	const int32 N = FMath::Clamp(NumParticles, 1, Meshes.Num());
 

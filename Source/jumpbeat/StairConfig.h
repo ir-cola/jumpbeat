@@ -268,6 +268,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "08_コンボ")
 	int32 SparkCount = 5;
 
+	/**
+	 * ★花火が弾ける高さ（足場からの距離）。
+	 *   足場から直接出ると火花が散っているようにしか見えない。
+	 *   少し浮かせて空中で開かせると花火らしくなる。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "08_コンボ")
+	float SparkHeight = 320.f;
+
 	// ================= 壁 =================
 
 	/** 穴の密度に対する壁の出やすさ。0.5 で穴の半分 */

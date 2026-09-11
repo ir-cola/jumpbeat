@@ -1,4 +1,4 @@
-#include "StairCharacter.h"
+﻿#include "StairCharacter.h"
 #include "StairStep.h"
 #include "StairGameMode.h"
 #include "StairConfig.h"
@@ -370,11 +370,14 @@ void AStairCharacter::FinishScriptedJump()
 	if (bHasBuffered && GM)
 	{
 		const float Age = GM->GetSongTimeNow() - BufferedSongTime;
+		const int32 Idx = BufferedNoteIndex;
 		bHasBuffered = false;
+		BufferedNoteIndex = -1;
 
 		if (Age >= 0.f && Age <= InputBufferSeconds)
 		{
-			ExecuteJump(BufferedDir, BufferedSongTime);
+			// 押した時点の音符に対して判定する
+			ExecuteJump(BufferedDir, BufferedSongTime, Idx);
 		}
 	}
 }
@@ -443,15 +446,19 @@ void AStairCharacter::TryJump(EStairDir InDir)
 		bHasBuffered = true;
 		BufferedDir = InDir;
 		BufferedSongTime = GM->GetSongTimeNow();
+
+		// ★押した時点で狙っていた音符を覚えておく
+		BufferedNoteIndex = GM->GetNextNoteIndex();
 		return;
 	}
 
 	ExecuteJump(InDir, GM->GetSongTimeNow());
 }
 
-void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime)
+void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime, int32 NoteIndex)
 {
 	bHasBuffered = false;
+	BufferedNoteIndex = -1;
 
 	AStairGameMode* GM = GetStairGameMode();
 	if (!GM)
@@ -467,18 +474,19 @@ void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime)
 	}
 
 	// ---- リズム判定。押した瞬間の再生位置が基準 ----
-	EStairJudge Judge = GM->JudgeAt(PressSongTime);
+	EStairJudge Judge = GM->JudgeAt(PressSongTime, NoteIndex);
 
 	// ★向きが譜面と違えば、タイミングが良くても MISS。
 	//   譜面どおりに叩くゲームなので、違う向きに跳んだら叩けていない。
-	if (Judge != EStairJudge::Miss && !GM->DoesDirectionMatch(InDir))
+	if (Judge != EStairJudge::Miss && !GM->DoesDirectionMatch(InDir, NoteIndex))
 	{
 		Judge = EStairJudge::Miss;
 	}
 
 	LastJudge = Judge;
 	TimeSinceJudge = 0.f;
-	GM->NotifyJudge(Judge, GM->GetSignedJudgeOffsetAt(PressSongTime));
+	GM->NotifyJudge(Judge,
+		GM->GetSignedJudgeOffsetAt(PressSongTime, NoteIndex), NoteIndex);
 
 	AStairStep* Here = Terrain->GetStep(CurrentRow, CurrentLane);
 	const bool bFromRed = Here && Here->GetTile() == EStairTile::Red;
