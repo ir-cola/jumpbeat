@@ -11,7 +11,7 @@ class UStairConfig;
  * BGM選択画面で選んだ曲を Game レベルへ渡すために使う。
  */
 UCLASS()
-class PUTICON_API UStairGameInstance : public UGameInstance
+class JUMPBEAT_API UStairGameInstance : public UGameInstance
 {
 	GENERATED_BODY()
 

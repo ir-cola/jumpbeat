@@ -521,15 +521,18 @@ void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime)
 		// 赤マスは PERFECT / GREAT どちらでも5段
 		StepsUp = C->RedSteps;
 	}
-	else if (GM->HasChart())
+	else if (GM->HasChartRoad())
 	{
-		// ★譜面があるときは判定で距離を変えない。
-		//   変えると着地点が二通りになり、譜面の道が定まらなくなる。
+		// ★譜面どおりの道を敷いているときは判定で距離を変えない。
+		//   変えると着地点が二通りになり、道が定まらなくなる。
 		//   判定はスコアとコンボにだけ効く。
 		StepsUp = GM->GetStepsPerNote();
 	}
 	else
 	{
+		// ★エンドレスは道を敷いていないので、距離を変えてよい。
+		//   PERFECT なら2段、GREAT なら1段。
+		//   踏み外す危険と引き換えに伸びる、元からの駆け引きに戻す。
 		StepsUp = (Judge == EStairJudge::Perfect) ? C->PerfectSteps : C->GreatSteps;
 	}
 

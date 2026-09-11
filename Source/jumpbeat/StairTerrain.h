@@ -25,7 +25,7 @@ class UStairConfig;
  * 確定済みの隣接マスを常に参照する。
  */
 UCLASS(ClassGroup = (Stair), meta = (BlueprintSpawnableComponent))
-class PUTICON_API UStairTerrain : public UActorComponent
+class JUMPBEAT_API UStairTerrain : public UActorComponent
 {
 	GENERATED_BODY()
 
@@ -76,6 +76,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void ClearAll();
+
+	/** いま存在する足場の数。背景が敷けたかの判断に使う */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetStepCount() const { return Steps.Num(); }
 
 	/** 生成する段のクラス */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stair")
@@ -145,6 +149,17 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
 	void CollapseRow(int32 Row);
+
+	/**
+	 * ★FromRow より先を、横に Delta レーンぶん動かす。
+	 *
+	 *   左右の音符を落とすと、譜面の道は横へ1つ進むのに
+	 *   プレイヤーはその場に残る。行を詰めても縦しか直らないので、
+	 *   横のずれはここで詰める。動かすのは前方だけで、
+	 *   いま立っている足場は動かさない。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void ShiftLanesAbove(int32 FromRow, int32 Delta);
 
 	/** 譜面の道を組み立てる側から座標をキーに変換するために公開する */
 	static int64 MakeKey(int32 Row, int32 Lane)

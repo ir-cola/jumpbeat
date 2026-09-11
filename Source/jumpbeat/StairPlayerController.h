@@ -13,7 +13,7 @@ struct FInputActionValue;
  * 入力は A / D / SPACE の3つだけ。
  */
 UCLASS()
-class PUTICON_API AStairPlayerController : public APlayerController
+class JUMPBEAT_API AStairPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 

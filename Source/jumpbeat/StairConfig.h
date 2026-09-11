@@ -10,7 +10,7 @@
  * ★調整は DA_StairConfig だけを触ること（ビルド不要）。
  */
 UCLASS(BlueprintType)
-class PUTICON_API UStairConfig : public UPrimaryDataAsset
+class JUMPBEAT_API UStairConfig : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 
@@ -328,6 +328,21 @@ public:
 		meta = (ClampMin = "0.1", ClampMax = "5.0"))
 	float BootFadeSeconds = 1.2f;
 
+	/**
+	 * ★白のまま待つ最低時間（秒）。
+	 *   段は BeginPlay で作り終わっているが、パッケージ版は
+	 *   マテリアルの準備が済むまで描画されない。
+	 *   その完了をゲームから知る手立てが無いので時間で待つ。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI",
+		meta = (ClampMin = "0.0", ClampMax = "10.0"))
+	float BootMinSeconds = 1.8f;
+
+	/** 保険。何があってもこの秒数で白は明ける */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "11_UI",
+		meta = (ClampMin = "1.0", ClampMax = "20.0"))
+	float BootMaxSeconds = 8.f;
+
 	// ================= 開始 =================
 
 	/**
@@ -357,14 +372,9 @@ public:
 		meta = (ClampMin = "1", ClampMax = "4"))
 	int32 ChartStepsPerNote = 1;
 
-	/**
-	 * ★エンドレスで音符1つあたりに進む段数。
-	 *   エンドレスはのぼった段数がそのままスコアになるので、
-	 *   通常プレイより1回あたりの伸びを大きくしておく。
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "13_譜面",
-		meta = (ClampMin = "1", ClampMax = "4"))
-	int32 EndlessStepsPerNote = 2;
+	// ★エンドレスの段数はここでは決めない。
+	//   道を敷かないので判定で距離を変えてよく、
+	//   PerfectSteps（2段）と GreatSteps（1段）がそのまま効く。
 
 	/**
 	 * ★譜面が使う幅の外側に、何レーンぶん余裕を持たせるか。

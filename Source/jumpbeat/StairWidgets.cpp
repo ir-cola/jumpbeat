@@ -5,6 +5,7 @@
 #include "StairMusicClock.h"
 #include "StairGameInstance.h"
 #include "StairChartEditor.h"
+#include "StairMenuGameMode.h"
 #include "Blueprint/WidgetTree.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/CanvasPanel.h"
@@ -116,7 +117,7 @@ UBorder* UStairWidgetBase::MakeBox(const FString& Name, const FLinearColor& Colo
 
 void UStairWidgetBase::Place(UCanvasPanel* Canvas, UWidget* W,
 	const FVector2D& Anchor, const FVector2D& Alignment,
-	const FVector2D& Position, const FVector2D& Size)
+	const FVector2D& Position, const FVector2D& Size, int32 ZOrder)
 {
 	UCanvasPanelSlot* PanelSlot = Canvas->AddChildToCanvas(W);
 	PanelSlot->SetAnchors(FAnchors(Anchor.X, Anchor.Y));
@@ -124,9 +125,10 @@ void UStairWidgetBase::Place(UCanvasPanel* Canvas, UWidget* W,
 	PanelSlot->SetPosition(Position);
 	PanelSlot->SetSize(Size);
 	PanelSlot->SetAutoSize(false);
+	PanelSlot->SetZOrder(ZOrder);
 }
 
-void UStairWidgetBase::PlaceFullScreen(UCanvasPanel* Canvas, UWidget* W)
+void UStairWidgetBase::PlaceFullScreen(UCanvasPanel* Canvas, UWidget* W, int32 ZOrder)
 {
 	UCanvasPanelSlot* PanelSlot = Canvas->AddChildToCanvas(W);
 	PanelSlot->SetAutoSize(false);
@@ -135,6 +137,7 @@ void UStairWidgetBase::PlaceFullScreen(UCanvasPanel* Canvas, UWidget* W)
 	PanelSlot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
 	PanelSlot->SetAlignment(FVector2D(0.f, 0.f));
 	PanelSlot->SetOffsets(FMargin(0.f, 0.f, 0.f, 0.f));
+	PanelSlot->SetZOrder(ZOrder);
 }
 
 // =====================================================================
@@ -209,7 +212,8 @@ void UStairWidgetBase::BuildIris(UCanvasPanel* Canvas)
 	//   ここを巨大な正方形にしていたため、マテリアルへ渡す UV が
 	//   画面の縦横比と噛み合わず、丸が縦長の楕円になっていた。
 	//   中心のごく狭い範囲が抜けたままになるのも同じ原因。
-	PlaceFullScreen(Canvas, IrisImage);
+	// ★常に最前面。素材元の表記などが幕より手前に出ないようにする
+	PlaceFullScreen(Canvas, IrisImage, Layer_Iris);
 
 	IrisImage->SetVisibility(ESlateVisibility::HitTestInvisible);
 
@@ -395,8 +399,9 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 		LogoImage->SetColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.f));
 	}
 
+	// ★ロゴだけは白い幕より手前。起動直後は「白地にロゴだけ」を見せる
 	Place(Canvas, LogoImage, FVector2D(0.5f, 0.f), FVector2D(0.5f, 0.f),
-		FVector2D(0.f, 30.f), LogoSize);
+		FVector2D(0.f, 30.f), LogoSize, Layer_Logo);
 	MenuParts.Add(LogoImage);
 
 	// ---- メニュー：プレイ / エンドレス / 遊び方 の3ボタン ----
@@ -422,18 +427,21 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 		FVector2D(0.f, -128.f), FVector2D(220.f, 54.f));
 	MenuParts.Add(QuitButton);
 
-	// ---- 素材元の表記（常時表示）----
-	// ★画面下端にぴったり付け、横幅は全体を覆う
+	// ---- 素材元の表記 ----
+	// ★メニューのときだけ出す。遊び方や曲選択を重ねたときは邪魔になる。
+	//   画面下端にぴったり付け、横幅は全体を覆う
 	UBorder* CreditShade = MakeBox(TEXT("CreditShade"),
 		FLinearColor(0.f, 0.f, 0.02f, 0.62f));
 	Place(Canvas, CreditShade, FVector2D(0.5f, 1.f), FVector2D(0.5f, 1.f),
 		FVector2D(0.f, 0.f), FVector2D(6000.f, 112.f));
+	CreditParts.Add(CreditShade);
 
 	// ★「素材元」と一覧が詰まって見えたので行間を広げた
 	UTextBlock* CreditHead = MakeText(TEXT("CreditHead"), TEXT("素材元"), 20,
 		FLinearColor(0.60f, 0.65f, 0.73f, 1.f));
 	Place(Canvas, CreditHead, FVector2D(0.5f, 1.f), FVector2D(0.5f, 1.f),
 		FVector2D(0.f, -80.f), FVector2D(900.f, 28.f));
+	CreditParts.Add(CreditHead);
 
 	// ★BGMは自作合成に差し替えたので魔王魂は外した。
 	//   残っているのは効果音の出どころのみ。
@@ -442,6 +450,7 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 		FLinearColor(0.80f, 0.84f, 0.90f, 1.f));
 	Place(Canvas, Credits, FVector2D(0.5f, 1.f), FVector2D(0.5f, 1.f),
 		FVector2D(0.f, -32.f), FVector2D(1400.f, 42.f));
+	CreditParts.Add(Credits);
 
 	// ---- 遊び方パネル（文字）----
 	UBorder* TutDim = MakeBox(TEXT("TutorialDim"), FLinearColor(0.f, 0.f, 0.02f, 0.86f));
@@ -575,8 +584,10 @@ void UStairTitleWidget::BuildUI(UCanvasPanel* Canvas)
 
 	// ★起動直後の白い幕は、さらにその上。
 	//   丸が開くより先に、まず白から明ける必要があるため。
+	// ★ロゴより奥、それ以外の UI より手前。
+	//   背景とボタンと素材元を白で覆い、ロゴだけを残す。
 	BootFade = MakeBox(TEXT("BootFade"), FLinearColor(1.f, 1.f, 1.f, 1.f));
-	PlaceFullScreen(Canvas, BootFade);
+	PlaceFullScreen(Canvas, BootFade, Layer_Boot);
 	BootFade->SetVisibility(ESlateVisibility::Collapsed);
 }
 
@@ -584,10 +595,35 @@ void UStairTitleWidget::NativeTick(const FGeometry& Geo, float DeltaSeconds)
 {
 	Super::NativeTick(Geo, DeltaSeconds);
 
-	// ---- 起動直後の白い幕 ----
+	const UStairConfig* C = GetConfig();
+
+	// ---- 背景が敷けるのを白のまま待つ ----
+	// ★段は BeginPlay で作り終わっているが、パッケージ版は
+	//   マテリアルの準備が済むまで描画されない。
+	//   その数秒を白地にロゴだけで持たせる。
+	if (bBootWaiting)
+	{
+		AStairTitleGameMode* TGM =
+			Cast<AStairTitleGameMode>(UGameplayStatics::GetGameMode(this));
+
+		if (TGM && !TGM->IsBackgroundReady())
+		{
+			return;   // まだ白のまま
+		}
+
+		// 背景が見せられるようになった。ここから明ける
+		bBootWaiting = false;
+		BootFadeLeft = C ? FMath::Max(0.1f, C->BootFadeSeconds) : 1.2f;
+
+		SetBootOnlyLogo(false);   // ボタンと素材元を出す
+
+		// ★BGM は白が明けるのに合わせて鳴らし始める
+		if (TGM) { TGM->StartBGM(); }
+	}
+
+	// ---- 白を明けていく ----
 	if (BootFadeLeft > 0.f && BootFade)
 	{
-		const UStairConfig* C = GetConfig();
 		const float Sec = C ? FMath::Max(0.1f, C->BootFadeSeconds) : 1.2f;
 
 		// ★読み込みで詰まったフレームで一気に明けないよう、進みに上限を置く
@@ -626,6 +662,10 @@ void UStairTitleWidget::ShowPanel(EStairTitlePanel Panel)
 	SetVis(MenuParts,     Panel == EStairTitlePanel::Menu);
 	SetVis(TutorialParts, Panel == EStairTitlePanel::Tutorial);
 	SetVis(SongParts,     Panel == EStairTitlePanel::SongSelect);
+
+	// ★素材元はメニューのときだけ。
+	//   遊び方や曲選択を重ねると下に残って読みづらい。
+	SetVis(CreditParts,   Panel == EStairTitlePanel::Menu);
 
 	// 「もどる」は両方の配列に入っているので、必要なら出し直す
 	if (BackButton)
@@ -706,8 +746,10 @@ void UStairTitleWidget::NativeConstruct()
 		{
 			GI->bBootDone = true;
 
-			const UStairConfig* C = GetConfig();
-			BootFadeLeft = C ? FMath::Max(0.1f, C->BootFadeSeconds) : 1.2f;
+			// ★まず「待ち」に入る。背景が敷けるまで白のまま止める。
+			//   明け始めるのは IsBackgroundReady が true になってから。
+			bBootWaiting = true;
+			BootFadeLeft = -1.f;
 
 			if (BootFade)
 			{
@@ -725,6 +767,36 @@ void UStairTitleWidget::NativeConstruct()
 
 	ShowPanel(bJumpToSongs ? EStairTitlePanel::SongSelect
 	                       : EStairTitlePanel::Menu);
+
+	// 白のあいだはロゴだけ見せる。ShowPanel のあとに掛ける
+	if (bBootWaiting)
+	{
+		SetBootOnlyLogo(true);
+	}
+}
+
+void UStairTitleWidget::SetBootOnlyLogo(bool bOnlyLogo)
+{
+	if (!bOnlyLogo)
+	{
+		// もとの出し分けに戻す
+		ShowPanel(CurrentPanel);
+		return;
+	}
+
+	// ★ロゴ以外は消す。幕に頼らず、確実に見えないようにする。
+	//   ロゴは幕より手前の層にいるので隠れない。
+	for (UWidget* W : MenuParts)
+	{
+		if (W && W != LogoImage)
+		{
+			W->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+	for (UWidget* W : CreditParts)
+	{
+		if (W) { W->SetVisibility(ESlateVisibility::Collapsed); }
+	}
 }
 
 void UStairTitleWidget::OnPlayClicked()

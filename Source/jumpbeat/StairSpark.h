@@ -12,7 +12,7 @@
  * 段と同じ BasicShapeMaterial を使うので追加アセットは要らない。
  */
 UCLASS()
-class PUTICON_API AStairSpark : public AActor
+class JUMPBEAT_API AStairSpark : public AActor
 {
 	GENERATED_BODY()
 

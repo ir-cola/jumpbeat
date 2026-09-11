@@ -801,12 +801,10 @@ EStairNote AStairGameMode::GetNoteType(int32 Index) const
 
 int32 AStairGameMode::GetStepsPerNote() const
 {
-	if (!Config)
-	{
-		return 1;
-	}
-	return FMath::Max(1, bEndless
-		? Config->EndlessStepsPerNote : Config->ChartStepsPerNote);
+	// ★譜面どおりの道を敷いているときの段数。
+	//   エンドレスは道を敷かないので、この値は使わない
+	//   （判定ごとに PerfectSteps / GreatSteps で決まる）。
+	return Config ? FMath::Max(1, Config->ChartStepsPerNote) : 1;
 }
 
 bool AStairGameMode::TryStartFromCountdown()
@@ -836,23 +834,19 @@ float AStairGameMode::GetNextNoteWindow() const
 		return BIG_NUMBER;
 	}
 
-	// ★いま押したのが「NextNoteIndex の音符を叩いた」のか、
-	//   それとも音符と音符のあいだの空押しなのかで、
-	//   次に押さなければならない音符が変わる。
-	const float ToNext = GetTimeToNextNote();
-	const float Great = Config->GreatWindowMs * 0.001f;
-
-	const int32 Target = (FMath::Abs(ToNext) <= Great)
-		? NextNoteIndex + 1   // いまの音符を叩いた。次はその先
-		: NextNoteIndex;      // 外した。狙うべきはまだこの音符
-
-	if (!CurrentSong.Notes.IsValidIndex(Target))
+	// ★NextNoteIndex は常に「次に押すべき音符」を指している。
+	//
+	//   叩けた音符は NotifyJudge が先に消費して1つ進めているので、
+	//   ここでさらに1つ先を見てはいけない。
+	//   見てしまうと滞空が長く見積もられ、
+	//   そのあいだに次の音符が流れ切ってしまう。
+	if (!CurrentSong.Notes.IsValidIndex(NextNoteIndex))
 	{
 		return BIG_NUMBER;    // これが最後。急ぐ必要はない
 	}
 
 	// ★「いまから」何秒あるか。遅れて押したぶんは短くなる
-	return FMath::Max(0.f, GetNoteTimeFromNow(Target));
+	return FMath::Max(0.f, GetNoteTimeFromNow(NextNoteIndex));
 }
 
 EStairNote AStairGameMode::GetNextNoteType() const
@@ -1241,7 +1235,13 @@ void AStairGameMode::CollapseRows(int32 Count, bool bClearRedUnderPlayer)
 		return;
 	}
 
-	const int32 Row = P->GetCurrentRow();
+	// ★跳んでいる最中なら着地予定の行を基準にする。
+	//
+	//   音符が詰まっていると、跳んでいるあいだに次の音符が流れ切ることがある。
+	//   そのとき CurrentRow は跳ぶ前の値のままなので、
+	//   Row+1 ＝ これから降りる足場を壊してしまい、
+	//   着地に失敗したり以降の位置がずれたりしていた。
+	const int32 Row = P->GetEffectiveRow();
 
 	// ★赤の音符を落としたときは、足元が赤のまま残る。
 	//   放っておくと次のジャンプも5段になって永久にずれるので解除する。
@@ -1285,6 +1285,29 @@ void AStairGameMode::OnNoteMissed(int32 Index)
 	//   赤のまま残せば、次の赤の音符でそのまま次の赤マスまで跳んでいける。
 	const bool bNextRed = CurrentSong.Notes.IsValidIndex(Index + 1)
 		&& (GetNoteType(Index + 1) == EStairNote::Red);
+
+	// ★横のずれも詰める。
+	//
+	//   左右の音符を落とすと、譜面の道は横へ1つ進むのにプレイヤーは
+	//   その場に残る。行を詰めても縦しか直らないので、
+	//   このままだと以降ずっと1レーンずれた道を歩くことになり、
+	//   穴や壁に突っ込んで進めなくなる。
+	if (AStairCharacter* P = GetPlayerChar())
+	{
+		int32 NoteLane = 0;
+		switch (GetNoteType(Index))
+		{
+		case EStairNote::Left:  NoteLane = -1; break;
+		case EStairNote::Right: NoteLane = 1;  break;
+		default: break;
+		}
+
+		if (NoteLane != 0 && HasChartRoad() && Terrain)
+		{
+			// 譜面が寄ったぶんだけ、前方を逆へ寄せて帳尻を合わせる
+			Terrain->ShiftLanesAbove(P->GetEffectiveRow(), -NoteLane);
+		}
+	}
 
 	CollapseRows(bRed ? FMath::Max(1, Config ? Config->RedSteps : 5)
 	                  : GetStepsPerNote(),
@@ -1437,7 +1460,8 @@ void AStairGameMode::DamageCurrentStep()
 		return;
 	}
 
-	AStairStep* Here = Terrain->GetStep(P->GetCurrentRow(), P->GetCurrentLane());
+	// 跳んでいる最中なら、これから降りる足場を傷める
+	AStairStep* Here = Terrain->GetStep(P->GetEffectiveRow(), P->GetEffectiveLane());
 	if (!Here)
 	{
 		return;

@@ -18,7 +18,7 @@ class AStairGameMode;
  * 段数は物理の初速倍率ではなく「N段上へ確定移動」として実装する。
  */
 UCLASS()
-class PUTICON_API AStairCharacter : public ACharacter
+class JUMPBEAT_API AStairCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
@@ -71,6 +71,19 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Stair")
 	bool IsAirborne() const { return bAirborne; }
+
+	/**
+	 * ★跳んでいる最中は「着地予定の位置」を返す。
+	 *
+	 *   地形を詰めるときの基準に使う。CurrentRow は着地するまで
+	 *   跳ぶ前の値のままなので、滞空中に音符を落とすと
+	 *   これから降りる足場そのものを壊してしまう。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetEffectiveRow() const { return bAirborne ? TargetRow : CurrentRow; }
+
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	int32 GetEffectiveLane() const { return bAirborne ? TargetLane : CurrentLane; }
 
 	UFUNCTION(BlueprintPure, Category = "Stair")
 	EStairJudge GetLastJudge() const { return LastJudge; }

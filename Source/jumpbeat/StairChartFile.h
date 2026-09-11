@@ -19,12 +19,12 @@
 namespace StairChartFile
 {
 	/** その曲の譜面ファイルの場所 */
-	PUTICON_API FString PathFor(int32 SongIndex);
+	JUMPBEAT_API FString PathFor(int32 SongIndex);
 
 	/** 読み込む。ファイルが無ければ false を返し、OutNotes は触らない */
-	PUTICON_API bool Load(int32 SongIndex, TArray<FStairChartNote>& OutNotes);
+	JUMPBEAT_API bool Load(int32 SongIndex, TArray<FStairChartNote>& OutNotes);
 
 	/** 書き出す。音符が0個でも「空の譜面」として書く */
-	PUTICON_API bool Save(int32 SongIndex, const TArray<FStairChartNote>& Notes,
+	JUMPBEAT_API bool Save(int32 SongIndex, const TArray<FStairChartNote>& Notes,
 		const FString& Title, float BPM, int32 Subdivision);
 }

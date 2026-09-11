@@ -21,7 +21,7 @@ class USoundWave;
  *   ・コールバックが来たら、急に飛ばないよう滑らかに寄せる
  */
 UCLASS(ClassGroup = (Stair), meta = (BlueprintSpawnableComponent))
-class PUTICON_API UStairMusicClock : public UActorComponent
+class JUMPBEAT_API UStairMusicClock : public UActorComponent
 {
 	GENERATED_BODY()
 

@@ -29,7 +29,7 @@ class UStairConfig;
  * CreateWidget に渡せば画面が出る。
  */
 UCLASS(Abstract)
-class PUTICON_API UStairWidgetBase : public UUserWidget
+class JUMPBEAT_API UStairWidgetBase : public UUserWidget
 {
 	GENERATED_BODY()
 
@@ -55,9 +55,26 @@ protected:
 
 	UBorder* MakeBox(const FString& Name, const FLinearColor& Color);
 
+	/**
+	 * ★重なり順は ZOrder で明示する。
+	 *   作った順に頼ると、あとから部品を足したときに前後が入れ替わる。
+	 *   （素材元の表記が幕より手前に出ていたのがこれ）
+	 */
+	enum EStairLayer : int32
+	{
+		Layer_Back    = 0,     // 背景・暗幕
+		Layer_Content = 10,    // 文字・ボタン・素材元
+		Layer_Boot    = 50,    // 起動時の白い幕
+		Layer_Logo    = 60,    // ロゴ。白い幕より手前に出す
+
+		// ★開閉の幕は必ず最前面。あとから部品を足しても超えられない値にする
+		Layer_Iris    = 10000
+	};
+
 	void Place(UCanvasPanel* Canvas, class UWidget* W,
 		const FVector2D& Anchor, const FVector2D& Alignment,
-		const FVector2D& Position, const FVector2D& Size);
+		const FVector2D& Position, const FVector2D& Size,
+		int32 ZOrder = Layer_Content);
 
 	/**
 	 * ★画面いっぱいに、ぴったり広げる。
@@ -67,7 +84,8 @@ protected:
 	 *   マテリアルに渡す UV も画面と一致しない。
 	 *   丸を描くとき、それが原因で縦長の楕円になってしまう。
 	 */
-	void PlaceFullScreen(UCanvasPanel* Canvas, class UWidget* W);
+	void PlaceFullScreen(UCanvasPanel* Canvas, class UWidget* W,
+		int32 ZOrder = Layer_Content);
 
 	/** ボタンを押した音。各ボタンのハンドラ先頭で呼ぶ */
 	UFUNCTION(BlueprintCallable, Category = "Stair")
@@ -139,7 +157,7 @@ enum class EStairTitlePanel : uint8
  *   背景で流れている階段をそのまま活かすため。
  */
 UCLASS()
-class PUTICON_API UStairTitleWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairTitleWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 
@@ -193,6 +211,13 @@ protected:
 	UPROPERTY() TArray<TObjectPtr<UWidget>> TutorialParts;
 	UPROPERTY() TArray<TObjectPtr<UWidget>> SongParts;
 
+	/**
+	 * ★素材元の表記。
+	 *   メニューのときだけ出す。遊び方や曲選択を重ねたときは邪魔になるし、
+	 *   起動直後の白い幕からも透けて見えてしまう。
+	 */
+	UPROPERTY() TArray<TObjectPtr<UWidget>> CreditParts;
+
 	/** ロゴ画像 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Stair|UI")
 	TObjectPtr<class UTexture2D> LogoTexture;
@@ -209,13 +234,23 @@ protected:
 
 	/** 白い幕の残り時間。0以下で役目を終える。負なら最初から使わない */
 	float BootFadeLeft = -1.f;
+
+	/**
+	 * ★背景が敷けるのを白のまま待っている最中か。
+	 *   起動直後は段の描画が数秒間追いつかないので、
+	 *   そのあいだは白地にロゴだけを見せる。
+	 */
+	bool bBootWaiting = false;
+
+	/** 白のあいだはロゴ以外を隠す */
+	void SetBootOnlyLogo(bool bOnlyLogo);
 };
 
 // =====================================================================
 
 /** BGM選択。曲を選んでゲームへ */
 UCLASS()
-class PUTICON_API UStairBGMSelectWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairBGMSelectWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 
@@ -242,7 +277,7 @@ protected:
 
 /** プレイ中のHUD */
 UCLASS()
-class PUTICON_API UStairHUDWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairHUDWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 
@@ -347,7 +382,7 @@ protected:
  *   入力モードは UI のみにして、ボタンだけを受け付ける。
  */
 UCLASS()
-class PUTICON_API UStairPauseWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairPauseWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 
@@ -373,7 +408,7 @@ protected:
 
 /** リザルト */
 UCLASS()
-class PUTICON_API UStairResultWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairResultWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 

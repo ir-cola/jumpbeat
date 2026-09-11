@@ -214,19 +214,51 @@ void AStairTitleGameMode::BeginPlay()
 	}
 
 
-	// ---- タイトルBGMをループで流す ----
-	if (Config && Config->TitleBGM)
+	// ★BGM はここでは鳴らさない。
+	//   起動直後は背景の描画が追いつかず、白い幕で待つことになる。
+	//   幕が明けるのに合わせて StartBGM を呼んでもらう。
+}
+
+bool AStairTitleGameMode::IsBackgroundReady() const
+{
+	const UStairConfig* C = Config;
+	const float MaxWait = C ? C->BootMaxSeconds : 8.f;
+	const float MinWait = C ? C->BootMinSeconds : 1.6f;
+
+	// 保険。何があっても白のまま止まらないようにする
+	if (BackgroundWait >= MaxWait)
 	{
-		BGMComp = UGameplayStatics::SpawnSound2D(
-			this, Config->TitleBGM, Config->TitleBGMVolume, 1.f, 0.f,
-			nullptr, false, true);
-		if (BGMComp)
-		{
-			// 音源側の Looping 設定に頼らず、ここでも確実にループさせる
-			BGMComp->bAutoDestroy = false;
-			BGMComp->OnAudioFinished.AddDynamic(
-				this, &AStairTitleGameMode::HandleBGMFinished);
-		}
+		return true;
+	}
+
+	// 段がまだ生成されていない
+	if (!Terrain || Terrain->GetStepCount() <= 0)
+	{
+		return false;
+	}
+
+	// ★段があっても、マテリアルの準備が済むまでは描画されない。
+	//   その完了をゲームから正しく知る手立てが無いので、
+	//   最低限の時間を置いて待つ。
+	return BackgroundWait >= MinWait;
+}
+
+void AStairTitleGameMode::StartBGM()
+{
+	if (BGMComp || !Config || !Config->TitleBGM)
+	{
+		return;
+	}
+
+	BGMComp = UGameplayStatics::SpawnSound2D(
+		this, Config->TitleBGM, Config->TitleBGMVolume, 1.f, 0.f,
+		nullptr, false, true);
+	if (BGMComp)
+	{
+		// 音源側の Looping 設定に頼らず、ここでも確実にループさせる
+		BGMComp->bAutoDestroy = false;
+		BGMComp->OnAudioFinished.AddDynamic(
+			this, &AStairTitleGameMode::HandleBGMFinished);
 	}
 }
 
@@ -629,6 +661,9 @@ void AStairTitleGameMode::Tick(float DeltaSeconds)
 
 	// 起動直後・切り替え直後の覆いを、幕が出そろったら解く
 	TickScreenFade(DeltaSeconds);
+
+	// 白い幕を明けてよいかの判断に使う
+	BackgroundWait += DeltaSeconds;
 
 	if (!Terrain || !ViewCamera)
 	{

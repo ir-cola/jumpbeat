@@ -3,13 +3,13 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
-public class puticonTarget : TargetRules
+public class jumpbeatTarget : TargetRules
 {
-	public puticonTarget(TargetInfo Target) : base(Target)
+	public jumpbeatTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V5;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_6;
-		ExtraModuleNames.Add("puticon");
+		ExtraModuleNames.Add("jumpbeat");
 	}
 }

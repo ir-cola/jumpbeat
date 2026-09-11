@@ -5,7 +5,7 @@
   "Description": "",
   "Modules": [
     {
-      "Name": "puticon",
+      "Name": "jumpbeat",
       "Type": "Runtime",
       "LoadingPhase": "Default"
     }

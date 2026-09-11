@@ -8,7 +8,7 @@ class UUserWidget;
 
 /** メニュー画面用の共通GameMode。指定のWidgetを出してマウス操作にするだけ */
 UCLASS(Abstract)
-class PUTICON_API AStairMenuGameModeBase : public AGameModeBase
+class JUMPBEAT_API AStairMenuGameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
 
@@ -38,7 +38,7 @@ protected:
  * ★背景でステージを自動生成し、カメラをゆっくり登らせて流す。
  */
 UCLASS()
-class PUTICON_API AStairTitleGameMode : public AStairMenuGameModeBase
+class JUMPBEAT_API AStairTitleGameMode : public AStairMenuGameModeBase
 {
 	GENERATED_BODY()
 
@@ -54,6 +54,20 @@ public:
 	 *   打ち込み中は曲を聴きながら置くので、タイトルの曲と混ざると使えない。
 	 */
 	void SetBGMPaused(bool bPause);
+
+	/**
+	 * ★背景を見せてよい状態か。起動時の白い幕を明ける判断に使う。
+	 *
+	 *   段そのものは BeginPlay で作り終わっているが、
+	 *   パッケージ版はマテリアルの準備が済むまで描画されないため、
+	 *   数秒のあいだ「階段が無い」状態が見えてしまう。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Stair")
+	bool IsBackgroundReady() const;
+
+	/** タイトルBGMを鳴らし始める。白が明けるのに合わせて呼ぶ */
+	UFUNCTION(BlueprintCallable, Category = "Stair")
+	void StartBGM();
 
 protected:
 	/** BGMが鳴り終わったら頭から鳴らし直す */
@@ -188,6 +202,9 @@ protected:
 	/** いまカメラがいる段（小数） */
 	float ScrollRow = 0.f;
 
+	/** 起動してからの経過。白い幕を明けてよいかの判断に使う */
+	float BackgroundWait = 0.f;
+
 	/** 生成した本体。GC に回収されないよう UPROPERTY で持つ */
 	UPROPERTY()
 	TArray<TObjectPtr<class AStairCharacter>> DemoActors;
@@ -245,7 +262,7 @@ private:
 
 /** BGM選択（L_BGMSelect） */
 UCLASS()
-class PUTICON_API AStairBGMSelectGameMode : public AStairMenuGameModeBase
+class JUMPBEAT_API AStairBGMSelectGameMode : public AStairMenuGameModeBase
 {
 	GENERATED_BODY()
 

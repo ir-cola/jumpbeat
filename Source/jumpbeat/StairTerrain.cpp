@@ -2,6 +2,7 @@
 #include "StairStep.h"
 #include "StairConfig.h"
 #include "Engine/World.h"
+#include "Algo/Reverse.h"
 
 UStairTerrain::UStairTerrain()
 {
@@ -184,6 +185,95 @@ void UStairTerrain::CollapseRow(int32 Row)
 
 	if (GeneratedUpTo >= Row) { --GeneratedUpTo; }
 	if (LastRedRow > Row)     { --LastRedRow; }
+}
+
+void UStairTerrain::ShiftLanesAbove(int32 FromRow, int32 Delta)
+{
+	if (Delta == 0)
+	{
+		return;
+	}
+
+	// ---- 足場を動かす ----
+	TArray<int64> Moving;
+	for (const TPair<int64, TObjectPtr<AStairStep>>& P : Steps)
+	{
+		if (RowOf(P.Key) > FromRow)
+		{
+			Moving.Add(P.Key);
+		}
+	}
+
+	// ★移動先が空いている順に処理する。
+	//   右へ寄せるなら右端から、左へ寄せるなら左端から。
+	//   逆順でやると、まだ動かしていない足場を上書きして消してしまう。
+	Moving.Sort();
+	if (Delta > 0)
+	{
+		Algo::Reverse(Moving);
+	}
+
+	const float Slide = Config ? Config->RowShiftSlideSeconds : 0.12f;
+
+	for (int64 K : Moving)
+	{
+		TObjectPtr<AStairStep> S = Steps.FindRef(K);
+		Steps.Remove(K);
+
+		const int32 Row = RowOf(K);
+		const int32 NewLane = LaneOf(K) + Delta;
+
+		if (S)
+		{
+			const FVector Before = S->GetActorLocation();
+			S->Lane = NewLane;
+			ApplyStepTransform(S, Row, NewLane, S->GetTile());
+			S->StartSlideFrom(Before, Slide);
+		}
+		Steps.Add(Key(Row, NewLane), S);
+	}
+
+	// ---- 穴・譜面の道も同じだけ動かす ----
+	auto ShiftKeySet = [FromRow, Delta](TSet<int64>& Set)
+	{
+		TSet<int64> Next;
+		Next.Reserve(Set.Num());
+		for (int64 K : Set)
+		{
+			const int32 R = RowOf(K);
+			Next.Add((R > FromRow) ? Key(R, LaneOf(K) + Delta) : K);
+		}
+		Set = MoveTemp(Next);
+	};
+
+	ShiftKeySet(Holes);
+	ShiftKeySet(ChartClear);
+
+	{
+		TMap<int64, EStairTile> Next;
+		Next.Reserve(ChartPath.Num());
+		for (const TPair<int64, EStairTile>& P : ChartPath)
+		{
+			const int32 R = RowOf(P.Key);
+			Next.Add((R > FromRow) ? Key(R, LaneOf(P.Key) + Delta) : P.Key, P.Value);
+		}
+		ChartPath = MoveTemp(Next);
+	}
+
+	// 確定済みのレーン範囲も、動かした行だけずらす
+	for (TPair<int32, TPair<int32, int32>>& P : RowRange)
+	{
+		if (P.Key > FromRow)
+		{
+			P.Value.Key += Delta;
+			P.Value.Value += Delta;
+		}
+	}
+
+	// ★横幅の制限は狭めず広げる。
+	//   詰めた結果、元の範囲の外へ道が出ることがある。
+	LaneMin = FMath::Min(LaneMin, LaneMin + Delta);
+	LaneMax = FMath::Max(LaneMax, LaneMax + Delta);
 }
 
 FVector UStairTerrain::GetStepLocation(int32 Row, int32 Lane) const

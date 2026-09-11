@@ -20,7 +20,7 @@
  * 製品版では丸ごと外す前提の開発用ツール。
  */
 UCLASS()
-class PUTICON_API UStairChartEditWidget : public UStairWidgetBase
+class JUMPBEAT_API UStairChartEditWidget : public UStairWidgetBase
 {
 	GENERATED_BODY()
 

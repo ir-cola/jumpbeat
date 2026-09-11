@@ -24,7 +24,7 @@ class ASkyLight;
  * 曲の進行度 t（0→1）はここで1回だけ計算し、地形・空・UIすべてが参照する。
  */
 UCLASS()
-class PUTICON_API AStairGameMode : public AGameModeBase
+class JUMPBEAT_API AStairGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 

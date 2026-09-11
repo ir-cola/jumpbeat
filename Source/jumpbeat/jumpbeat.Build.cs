@@ -2,9 +2,9 @@
 
 using UnrealBuildTool;
 
-public class puticon : ModuleRules
+public class jumpbeat : ModuleRules
 {
-	public puticon(ReadOnlyTargetRules Target) : base(Target)
+	public jumpbeat(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
@@ -24,7 +24,7 @@ public class puticon : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
 		PublicIncludePaths.AddRange(new string[] {
-			"puticon"
+			"jumpbeat"
 		});
 
 		// Uncomment if you are using Slate UI

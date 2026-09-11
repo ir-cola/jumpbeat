@@ -13,7 +13,7 @@ class UMaterialInstanceDynamic;
  * 行(Row)とレーン(Lane)を持つ。レーンは負の値も取る（横幅は無限）。
  */
 UCLASS()
-class PUTICON_API AStairStep : public AActor
+class JUMPBEAT_API AStairStep : public AActor
 {
 	GENERATED_BODY()
 
