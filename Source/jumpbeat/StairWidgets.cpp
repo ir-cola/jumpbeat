@@ -1429,14 +1429,20 @@ void UStairHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 				FString ArrowText;
 				FLinearColor Col = FLinearColor(1.f, 1.f, 1.f, Fade);
 
+				// ★左右は色でも見分けられるようにする。
+				//   形だけだと、速い譜面では向きの判断が一瞬遅れる。
+				FLinearColor ArrowCol = FLinearColor(1.f, 1.f, 1.f, Fade);
+
 				switch (Type)
 				{
 				case EStairNote::Left:
 					ArrowText = TEXT("◀");
+					ArrowCol = FLinearColor(0.62f, 0.95f, 0.70f, Fade);  // パステルグリーン
 					Col.A = 0.f;                                  // バーは隠す
 					break;
 				case EStairNote::Right:
 					ArrowText = TEXT("▶");
+					ArrowCol = FLinearColor(1.f, 0.62f, 0.62f, Fade);    // パステルレッド
 					Col.A = 0.f;
 					break;
 				default:
@@ -1451,8 +1457,7 @@ void UStairHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 				if (Arrow)
 				{
 					Arrow->SetText(FText::FromString(ArrowText));
-					Arrow->SetColorAndOpacity(
-						FSlateColor(FLinearColor(1.f, 1.f, 1.f, Fade)));
+					Arrow->SetColorAndOpacity(FSlateColor(ArrowCol));
 				}
 			}
 		}

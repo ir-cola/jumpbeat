@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
@@ -134,10 +134,9 @@ protected:
 	 *   ・着地点は必ず狙ったマスの中央
 	 *   ・跳んでいるあいだは壁をすり抜ける（跳び越えられる）
 	 *
-	 * @param bFallAfter 着地点に足場が無い場合。着いたあと落下させる
 	 */
 	void StartScriptedJump(const FVector& Target, float FlightTime,
-		float ApexClearance, bool bFallAfter);
+		float ApexClearance);
 
 	/** 跳んでいる最中の位置を進める */
 	void TickScriptedJump(float DeltaSeconds);
@@ -206,9 +205,6 @@ protected:
 	float JumpElapsed = 0.f;
 	float JumpDuration = 0.42f;
 	float JumpArcHeight = 140.f;
-
-	/** 着地点に足場が無い。着いたら落とす */
-	bool bFallOnLand = false;
 
 	/**
 	 * ★跳んでいるあいだのアニメーション。

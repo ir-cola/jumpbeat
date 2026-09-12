@@ -252,13 +252,12 @@ void AStairCharacter::RestoreAnimBlueprint()
 }
 
 void AStairCharacter::StartScriptedJump(const FVector& Target, float FlightTime,
-	float ApexClearance, bool bFallAfter)
+	float ApexClearance)
 {
 	JumpFrom = GetActorLocation();
 	JumpTo = Target;
 	JumpElapsed = 0.f;
 	JumpDuration = FMath::Max(0.12f, FlightTime);
-	bFallOnLand = bFallAfter;
 
 	// 頂点は「高いほう＋余裕」。途中の段や壁を越えられる高さにする
 	const float Dz = JumpTo.Z - JumpFrom.Z;
@@ -314,7 +313,12 @@ void AStairCharacter::FinishScriptedJump()
 	UStairTerrain* Terrain = GM ? GM->GetTerrain() : nullptr;
 
 	// ---- 着地点に足場が無い ＝ 落ちる ----
-	if (bFallOnLand || !Terrain || !Terrain->HasLandableStep(TargetRow, TargetLane))
+	// ★跳ぶ前に出した「落ちる予定」は使わない。着地するこの瞬間に見る。
+	//
+	//   音符を落とすと地形を詰めるので、跳んでいるあいだに足場が動く。
+	//   跳ぶ前の判断を持ち越すと、着地点に足場ができていても
+	//   予定どおり落ちてしまい、きれいに跳んだのに死ぬことがある。
+	if (!Terrain || !Terrain->HasLandableStep(TargetRow, TargetLane))
 	{
 		// ★ここからは物理に任せる。
 		//   跳躍だけを手で制御し、落下は素直に落とす。
@@ -514,7 +518,7 @@ void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime, int32 No
 		TargetLane = CurrentLane;
 
 		StartScriptedJump(GetStandLocation(CurrentRow, CurrentLane),
-			Flight, C->MissJumpApex * ApexScale, false);
+			Flight, C->MissJumpApex * ApexScale);
 		PlayJumpSound(Judge);
 
 		GM->NotifyMissJump();
@@ -613,7 +617,7 @@ void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime, int32 No
 			TargetLane = CurrentLane;
 
 			StartScriptedJump(GetStandLocation(CurrentRow, CurrentLane),
-				Flight, C->MissJumpApex * ApexScale, false);
+				Flight, C->MissJumpApex * ApexScale);
 			PlayJumpSound(EStairJudge::Miss);
 
 			GM->NotifyWallBounce();
@@ -637,11 +641,8 @@ void AStairCharacter::ExecuteJump(EStairDir InDir, float PressSongTime, int32 No
 
 	// ---- 飛ばす ----
 	// ★段数によらず滞空時間は同じ。5段跳びでもリズムがずれない。
-	//   着地点に足場が無ければ、着いたあと落ちる。
-	const bool bWillFall = !Terrain->HasLandableStep(TargetRow, TargetLane);
-
-	StartScriptedJump(GetStandLocation(TargetRow, TargetLane),
-		Flight, Apex, bWillFall);
+	//   足場があるかどうかは着地するときに見るので、ここでは決めない。
+	StartScriptedJump(GetStandLocation(TargetRow, TargetLane), Flight, Apex);
 	PlayJumpSound(Judge);
 
 	// 5段ジャンプはカメラを引く
